@@ -1,122 +1,17 @@
-# 如何提交问题与日志
+# 问题反馈
 
-收不到推送时，请按下面的步骤收集信息，然后[提交 Issue](https://github.com/Artifical0/fcmfix-coloros/issues/new/choose)。
-FCMFix 的日志写在系统 logcat 中，标签为 `fcmfix`，不在 LSPosed 管理器的“模块日志”页面里，需要用下面的脚本导出。
+请在 [本仓库 Issues](https://github.com/zopulus/fcmfix-coloros17/issues) 描述系统版本、模块版本、LSPosed 版本、目标应用、发生时间与复现步骤。
 
-## 1. 先自查
+先确认仅启用一个 FCMFix、系统与电池作用域已启用并重启、应用已加入允许名单、应用通知权限开启。可在首页“Google Play 服务诊断”检查 FCM 连接。
 
-- LSPosed 中 FCMFix 同时勾选了 **系统框架** 和 **电池** 两个作用域，改动后已重启；
-- 只启用了一个 FCMFix；
-- 目标应用已加入 FCMFix 允许列表，应用自身的通知权限已打开；
-- 打开 FCMFix →“打开 FCM Diagnostics”，查看连接状态。
-
-**国内网络说明**：FCMFix 修复的是 GMS 收到消息之后被 ColorOS 拦截的问题，不能让 GMS 连上 FCM 服务器。
-如果 FCM Diagnostics 亮屏时也一直是 disconnected，通常是网络问题：`mtalk.google.com` 的 DNS 被污染，
-或者 5228–5230 端口被封。这种情况需要能返回正确结果的 DNS、hosts 或代理，模块无法解决。
-判断方法见[FCM 断开：网络问题还是系统限制](#fcm-断开网络问题还是系统限制)。
-
-## FCM 断开：网络问题还是系统限制
-
-FCM Diagnostics 中的事件都带时间戳，判断的关键是断开发生的时机和规律。
-
-### 偶发断开还是持续断不开
-
-- 断开后几秒到几十秒内重新 connected：通常正常。运营商或路由器会清理长时间空闲的 TCP 连接（NAT 超时），
-  GMS 会自动重连。
-- 断开后长时间连不上，或反复连上又断开：继续按下文排查。
-- `client entering doze` 本身是正常记录，表示手机进入 Doze 休眠。要看的是它之后连接是否保持。
-
-### 看断开时机
-
-| 现象 | 更可能的原因 |
-| --- | --- |
-| 亮屏使用中也连不上或反复断开 | 网络 |
-| 只在某个网络下出问题，例如移动数据不行、某个 Wi‑Fi 正常 | 网络 |
-| 断开发生在 `client entering doze` 之后，直到亮屏或退出 Doze 才恢复 | 系统限制 |
-| 断开前刚发生 Wi‑Fi / 移动数据切换或网络中断 | 网络切换，属正常 |
-
-### 测试网络连通性
-
-在 Termux 中执行（先 `pkg install curl dnsutils`）：
+仓库 `scripts/collect-report.sh` 只读取系统状态与日志：
 
 ```sh
-nslookup mtalk.google.com
-curl -v --max-time 5 telnet://mtalk.google.com:5228
+adb push scripts/collect-report.sh /sdcard/Download/collect-report.sh
+adb shell su -c 'sh /sdcard/Download/collect-report.sh'
+adb pull /sdcard/Download/fcmfix-report.txt
 ```
 
-- `nslookup` 返回的不是 Google 地址（常见为 `142.250.x.x`、`74.125.x.x`、`172.217.x.x`、`108.177.x.x` 等）：DNS 被污染；
-- `curl` 输出 `Connected to ...`：该端口可连通；超时或 `Connection refused`：端口被封或 IP 不对。
-  解析结果可疑时，可以换一个已知正确的 IP 再测：`curl -v --max-time 5 telnet://<IP>:5228`。
+日志可能包含包名、网络地址和其他应用信息，请检查并删除隐私内容后再上传。不要上传签名密钥、账号信息或未经处理的完整系统日志。
 
-请在出问题的网络下测试。
-
-### 代理能通、直连不行
-
-基本可以确定是网络问题。ColorOS 的限制是按 GMS 应用（UID）施加的，与流量走代理还是直连无关：
-GMS 被设为禁止联网时，开代理也没有网；闹钟降级、待机分组也不会因为走代理而消失。
-只有代理能通，说明系统没有拦 GMS，差别在网络路径上。
-
-代理同时改变了 DNS（远端解析）和出口路径，可以进一步细分：
-
-- 直连时 `nslookup` 结果不是 Google 地址：DNS 被污染。修改 hosts 或使用能返回正确结果的 DNS，
-  通常直连即可恢复，不一定需要代理；
-- 解析结果正确，但直连 5228 端口超时：IP 或端口被封，只能通过代理。
-
-两个容易误判的情况：
-
-- 手机上用 VPN 类代理时，代理应用在后台被系统杀掉或冻结，FCM 会随之断开，看起来像 FCM 问题。
-  请给代理应用开启自启动并关闭电池优化；
-- 亮屏时代理能通、熄屏后断开：这与走不走代理无关，按上文“看断开时机”判断是否集中在 Doze 期间。
-
-### 排除系统限制
-
-用下文脚本导出报告，确认：
-
-- “GMS 联网策略”一栏没有 `REJECT_ALL`；
-- GMS 待机分组不是 `40`；
-- 日志中有 `Oplus Battery Google restrict broadcast hooks active` 和 `Oplus Google alarm restriction hook active`，
-  没有 `hook error`。
-
-以上正常、连通性测试不通：网络问题。连通性测试能通、断开却集中在 Doze 期间：可能存在尚未覆盖的系统限制，
-请附上报告和断开时间点提交 Issue。
-
-最直接的验证：连一个确定可用的网络，熄屏放置半小时。在该网络下不断开，而在原网络下断开，就是原网络的问题。
-
-## 2. 导出报告（需要 Root）
-
-1. 下载 [`collect-report.sh`](../scripts/collect-report.sh)（点击后选“Download raw file”），保存到手机的 `Download` 目录。
-2. **重启手机**，开机后 3–5 分钟内，在 Termux 或 `adb shell` 中执行：
-
-   ```sh
-   su -c sh /sdcard/Download/collect-report.sh fcmfix-report-boot.txt
-   ```
-
-   开机时模块会打印各个 Hook 是否生效，logcat 缓冲区有限，时间长了这些行会被冲掉。
-3. **复现问题后**再执行一次，例如熄屏等待 10 分钟，再发一条测试消息：
-
-   ```sh
-   su -c sh /sdcard/Download/collect-report.sh fcmfix-report-issue.txt
-   ```
-
-两份报告都保存在 `Download` 目录。脚本只读取系统状态和日志，不修改任何设置。
-
-不方便下载脚本时，也可以直接复制 [`collect-report.sh`](../scripts/collect-report.sh) 的内容，保存为同名文件后执行。
-
-## 3. 提交时附上
-
-- 上面两份报告；
-- FCM Diagnostics 截图；
-- LSPosed 中 FCMFix 作用域截图；
-- 网络环境：Wi‑Fi 或移动数据，是否使用代理；
-- 测试应用，以及发送测试消息的大致时间。
-
-报告中包含已安装应用的包名，公开发布前可以自行打码，但请保留 `fcmfix`、`GoogleController`、`OplusGoogle` 相关行。
-
-## 报告怎么看
-
-| 报告内容 | 含义 |
-| --- | --- |
-| “GMS 联网策略”下出现 `REJECT_ALL` | GMS 被禁止联网。通常是电池作用域未生效（没勾选，或勾选后没有重启） |
-| 待机分组为 `40`，或 `google_restric_info` 为 `1` 但日志中没有 `restrict broadcast cleared` | ColorOS 17 的 Google 限制未被解除，需要 53-coloros-10-rc2 或更新版本 |
-| 日志中有 `hook error` 或 `Unsupported` | 某个 Hook 与当前固件不匹配，请在 Issue 中贴出这些行 |
-| 以上均正常，但 FCM Diagnostics 一直 disconnected | 网络问题（DNS 污染或端口被封），见上文国内网络说明 |
+Hook 成功与实际推送成功需要分别验证；FCM 网络连接失败和目标应用被系统拦截也需要分别定位。

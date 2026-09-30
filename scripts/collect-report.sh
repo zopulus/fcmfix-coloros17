@@ -4,7 +4,7 @@
 
 OUT="/sdcard/Download/${1:-fcmfix-report.txt}"
 GMS=com.google.android.gms
-MODULE=io.github.artifical0.fcmfix.coloros
+MODULE=io.github.zopulus.ffc
 GMS_UID=$(pm list packages -U "$GMS" | grep "^package:$GMS " | grep -o 'uid:[0-9]*' | cut -d: -f2)
 
 section() { echo; echo "== $1"; }
@@ -21,7 +21,7 @@ section() { echo; echo "== $1"; }
   section "模块版本"
   dumpsys package "$MODULE" | grep -m1 versionName || echo "未安装 $MODULE"
 
-  section "GMS 联网策略（无输出表示 POLICY_NONE，出现 REJECT_ALL 表示 GMS 被禁止联网）"
+  section "GMS 联网策略（无匹配行不代表已确认无限制；同时检查 Oplus 策略与 Hook 日志）"
   echo "gms uid=$GMS_UID"
   [ -n "$GMS_UID" ] && dumpsys netpolicy | grep -E "UID=$GMS_UID( |$)"
 
@@ -33,6 +33,11 @@ section() { echo; echo "== $1"; }
 
   section "FCMFix / ColorOS Google 限制日志"
   logcat -d | grep -iE "fcmfix|GoogleController|OplusGoogle"
+  section "Doze 白名单"
+  dumpsys deviceidle whitelist
+
+  section "Google 唤醒闹钟"
+  dumpsys alarm | grep -iE "google|gms|restrict|wakeup"
 } > "$OUT" 2>&1
 
 echo "已保存到 $OUT"

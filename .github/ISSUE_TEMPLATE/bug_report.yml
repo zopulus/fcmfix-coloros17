@@ -1,65 +1,22 @@
-name: 收不到推送 / 问题报告
-description: 推送不到达、FCM 连接异常或模块报错
-labels: [bug]
+name: 推送或界面问题
+description: 报告 ColorOS17 定制版的问题
+title: "[问题] "
 body:
-  - type: markdown
-    attributes:
-      value: |
-        提交前请先按 [如何提交问题与日志](https://github.com/Artifical0/fcmfix-coloros/blob/master/docs/report-issue.md) 自查，并用脚本导出报告。
-        FCM Diagnostics 亮屏也一直 disconnected 时，通常是网络问题（DNS 或端口），模块无法解决。
   - type: input
-    id: device
+    id: versions
     attributes:
-      label: 机型与完整系统版本
-      placeholder: 一加 15 PLK110_17.0.0.102(CN01)
-    validations:
-      required: true
-  - type: input
-    id: version
-    attributes:
-      label: FCMFix 版本
-      placeholder: 53-coloros-10
-    validations:
-      required: true
-  - type: checkboxes
-    id: scope
-    attributes:
-      label: 作用域
-      options:
-        - label: 已勾选“系统框架”
-          required: true
-        - label: 已勾选“电池”（com.oplus.battery）
-        - label: 修改作用域或更新后已重启
-          required: true
-  - type: dropdown
-    id: fcm
-    attributes:
-      label: FCM Diagnostics 连接状态
-      options:
-        - 亮屏也一直 disconnected
-        - 亮屏正常，熄屏一段时间后断开
-        - 一直 connected，但收不到推送
-        - 不确定
-    validations:
-      required: true
-  - type: input
-    id: network
-    attributes:
-      label: 网络环境
-      placeholder: Wi‑Fi / 移动数据；是否使用代理，代理软件名称
+      label: 系统、模块和 LSPosed 版本
     validations:
       required: true
   - type: textarea
-    id: detail
+    id: reproduction
     attributes:
-      label: 问题描述
-      description: 测试应用、复现步骤、发送测试消息的大致时间
+      label: 复现步骤与发生时间
+      description: 请注明目标应用、是否重启、息屏及后台状态
     validations:
       required: true
   - type: textarea
-    id: report
+    id: logs
     attributes:
-      label: 报告与截图
-      description: 拖入 collect-report.sh 导出的两份报告、FCM Diagnostics 截图、LSPosed 作用域截图
-    validations:
-      required: true
+      label: 日志与截图
+      description: 请检查并去除隐私信息，不要上传签名密钥

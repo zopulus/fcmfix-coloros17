@@ -1,8 +1,4 @@
 <resources>
-    <string name="app_name">FCMFix ColorOS</string>
-    <string name="module_description">修复 ColorOS 16/17 对 FCM 后台唤醒、广播投递和联网的限制</string>
-    <string name="screen_title">后台推送保护</string>
-    <string name="screen_description">勾选需要由 FCM 唤醒的应用</string>
-    <string name="screen_scope">LSPosed 作用域：系统框架 + 电池</string>
-    <string name="contains_fcm">包含 FCM</string>
+    <string name="app_name">Fcmfix for ColorOS17</string>
+    <string name="module_description">优化fcm在ColorOS的使用体验，仅适配ColorOS17</string>
 </resources>

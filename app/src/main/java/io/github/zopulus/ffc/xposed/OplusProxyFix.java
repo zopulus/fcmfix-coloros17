@@ -1,0 +1,774 @@
+package io.github.zopulus.ffc.xposed;
+
+import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
+import android.os.SystemClock;
+import android.os.WorkSource;
+import android.util.Pair;
+
+import io.github.zopulus.ffc.libxposed.XC_MethodHook;
+import io.github.zopulus.ffc.libxposed.XposedBridge;
+import io.github.zopulus.ffc.libxposed.XposedHelpers;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.concurrent.ConcurrentHashMap;
+
+public class OplusProxyFix extends XposedModule {
+
+    private static final String OPLUS_APP_STARTUP_MANAGER =
+            "com.android.server.am.OplusAppStartupManager";
+    private static final String OPLUS_STARTUP_STRATEGY =
+            OPLUS_APP_STARTUP_MANAGER + "$OplusStartupStrategy";
+    private static final String OPLUS_HANS_DB_CONFIG =
+            "com.android.server.hans.OplusHansDBConfig";
+    private static final String OPLUS_APP_NET_CONTROL_SERVICE =
+            "com.android.server.nwpower.OAppNetControlService";
+    private static final String OPLUS_HANS_SCENE_MANAGER =
+            "com.android.server.hans.scene.HansSceneManager";
+    private static final String OPLUS_HANS_CGROUP =
+            "com.android.server.hans.freeze.HansCGroup";
+    private static final String OPLUS_BROADCAST_PROXY_ACTION =
+            "com.android.server.am.BroadcastProxyAction";
+    private static final String TYPE_BIND_SERVICE_FROM_GCM = "bsgcm";
+    private static final String START_PROCESS_FROM_GCM_BIND_SERVICE = "system[gcm]";
+    private static final long FCM_DELIVERY_WINDOW_MS = 20_000L;
+
+    /**
+     * ColorOS can unfreeze an FCM target, deliver the broadcast and freeze it again about
+     * three seconds later. OAppNetControlService then destroys the target UID's sockets,
+     * so applications such as WeChat may not finish fetching the actual message. Keep only
+     * the UID involved in the current FCM delivery unfrozen and online for the same kind of
+     * short execution window Android grants to high-priority push work.
+     */
+    private static final io.github.zopulus.ffc.util.FcmDeliveryWindow sFcmDeliveryWindows =
+            new io.github.zopulus.ffc.util.FcmDeliveryWindow();
+    private static final ConcurrentHashMap<Integer, String> sFcmDeliveryPackages =
+            new ConcurrentHashMap<>();
+
+    private static final String[] PROXY_BROADCAST_CLASSES = new String[]{
+            "com.android.server.am.OplusProxyBroadcast",
+            "com.android.server.am.OplusBroadcastProxy",
+            "com.oplus.server.am.OplusProxyBroadcast"
+    };
+
+    private static final String[] PROXY_WAKELOCK_CLASSES = new String[]{
+            "com.android.server.power.OplusProxyWakeLock",
+            "com.android.server.power.oplus.OplusProxyWakeLock",
+            "com.oplus.server.power.OplusProxyWakeLock"
+    };
+
+    private static volatile Object sOplusProxyWakeLock;
+    private static volatile Method sUnfreezeMethod;
+
+    public OplusProxyFix(ClassLoader classLoader) {
+        super(classLoader);
+        runHook("OplusProxyWakeLock", this::startHookOplusProxyWakeLock);
+        runHook("OplusProxyBroadcast", this::startHookOplusProxyBroadcast);
+        runHook("updateGmsRestrict", this::startHookUpdateGmsRestrict);
+        runHook("isGoogleRestricInfoOn", this::startHookIsGoogleRestricInfoOn);
+        runHook("isAppClassifyRestricted", this::startHookAppClassifyRestricted);
+        runHook("isAllowStartFromBindService", this::startHookGcmBindService);
+        runHook("isAllowStartFromStartService", this::startHookFcmStartService);
+        runHook("isSysRestrictionCpn", this::startHookHansGmsRestriction);
+        runHook("OAppNetControlService", this::startHookOAppNetControlService);
+        runHook("HansSceneManager FCM window", this::startHookHansFcmWindow);
+        runHook("HansCGroup FCM window", this::startHookHansCGroupFcmWindow);
+        runHook("CpnProxy broadcast", this::startHookCpnProxyBroadcast);
+    }
+
+    private interface HookAction {
+        void run() throws Throwable;
+    }
+
+    private void runHook(String name, HookAction action) {
+        try {
+            action.run();
+        } catch (Throwable e) {
+            printLog("hook error " + name + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
+        }
+    }
+
+    private void startHookOplusProxyBroadcast() {
+        int hookCount = 0;
+        for (String className : PROXY_BROADCAST_CLASSES) {
+            Class<?> proxyClass = XposedHelpers.findClassIfExists(className, classLoader);
+            if (proxyClass == null) {
+                continue;
+            }
+
+            for (Method method : proxyClass.getDeclaredMethods()) {
+                if (!"shouldProxy".equals(method.getName())) {
+                    continue;
+                }
+                Object noProxyResult = getNoProxyResult(method.getReturnType());
+                if (noProxyResult == UnsupportedResult.VALUE) {
+                    printLog("unsupported shouldProxy candidate: " + describeMethod(method));
+                    continue;
+                }
+
+                final Object finalNoProxyResult = noProxyResult;
+                XposedBridge.hookMethod(method, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        Intent intent = findIntentArgument(param.args);
+                        if (intent == null || !isFCMAction(intent.getAction())) {
+                            return;
+                        }
+
+                        String target = getIntentTarget(intent);
+                        if (target == null) {
+                            target = findAllowedPackageArgument(param.args);
+                        }
+                        if (trustedDelivery(intent, target, param)) {
+                            printLog("Oplus shouldProxy bypass: pkg=" + target
+                                    + ", action=" + intent.getAction(), true);
+                            param.setResult(finalNoProxyResult);
+                        }
+                    }
+                });
+                hookCount++;
+                printLog("Oplus shouldProxy hook active: " + describeMethod(method));
+            }
+        }
+        if (hookCount == 0) {
+            throw new NoSuchMethodError("No compatible Oplus shouldProxy method");
+        }
+    }
+
+    /**
+     * ColorOS 17 Osense scene proxy (game / app start / camera) can hold broadcasts for cold
+     * targets. Its action list is loaded from cloud-updatable config, so exempt only a
+     * BroadcastRecord-attributed GMS RECEIVE to an allowlisted target.
+     */
+    private void startHookCpnProxyBroadcast() {
+        Class<?> actionClass = XposedHelpers.findClassIfExists(OPLUS_BROADCAST_PROXY_ACTION, classLoader);
+        if (actionClass == null) throw new NoClassDefFoundError(OPLUS_BROADCAST_PROXY_ACTION);
+
+        int hooks = 0;
+        for (Method method : actionClass.getDeclaredMethods()) {
+            if (!"enqueueProxyBroadcastLocked".equals(method.getName())
+                    || !isBooleanType(method.getReturnType())) {
+                continue;
+            }
+            XposedBridge.hookMethod(method, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    Intent intent = findIntentArgument(param.args);
+                    if (intent == null || !isFCMAction(intent.getAction())) return;
+                    String target = getIntentTarget(intent);
+                    if (trustedDelivery(intent, target, param)) {
+                        printLog("Oplus CpnProxy broadcast bypass: pkg=" + target, true);
+                        param.setResult(false);
+                    }
+                }
+            });
+            hooks++;
+            printLog("Oplus CpnProxy broadcast hook active: " + describeMethod(method));
+        }
+        if (hooks == 0) throw new NoSuchMethodError("BroadcastProxyAction#enqueueProxyBroadcastLocked");
+    }
+
+    private void startHookOplusProxyWakeLock() {
+        Class<?> wakeLockClass = null;
+        for (String className : PROXY_WAKELOCK_CLASSES) {
+            wakeLockClass = XposedHelpers.findClassIfExists(className, classLoader);
+            if (wakeLockClass != null) {
+                break;
+            }
+        }
+        if (wakeLockClass == null) {
+            throw new NoClassDefFoundError("OplusProxyWakeLock");
+        }
+
+        sUnfreezeMethod = findBestUnfreezeMethod(wakeLockClass);
+        if (sUnfreezeMethod == null) {
+            throw new NoSuchMethodError(wakeLockClass.getName() + "#unfreezeIfNeed");
+        }
+        sUnfreezeMethod.setAccessible(true);
+        printLog("Oplus unfreeze method selected: " + describeMethod(sUnfreezeMethod));
+
+        if (Modifier.isStatic(sUnfreezeMethod.getModifiers())) {
+            return;
+        }
+
+        int constructorHooks = 0;
+        for (Constructor<?> constructor : wakeLockClass.getDeclaredConstructors()) {
+            constructor.setAccessible(true);
+            XposedBridge.hookMethod(constructor, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    sOplusProxyWakeLock = param.thisObject;
+                    printLog("OplusProxyWakeLock instance captured");
+                }
+            });
+            constructorHooks++;
+        }
+        if (constructorHooks == 0) {
+            throw new NoSuchMethodError(wakeLockClass.getName() + "#<init>");
+        }
+    }
+
+    private Method findBestUnfreezeMethod(Class<?> clazz) {
+        Method best = null;
+        int bestScore = -1;
+        for (Method method : clazz.getDeclaredMethods()) {
+            if (!"unfreezeIfNeed".equals(method.getName())) {
+                continue;
+            }
+            int score = 0;
+            for (Class<?> type : method.getParameterTypes()) {
+                if (type == int.class || type == Integer.class) score += 4;
+                if (WorkSource.class.isAssignableFrom(type)) score += 3;
+                if (type == String.class) score += 1;
+            }
+            if (score > bestScore) {
+                best = method;
+                bestScore = score;
+            }
+        }
+        return best;
+    }
+
+    private static int getTargetUidFromPackageName(String packageName) {
+        if (packageName != null && context != null) {
+            try {
+                return context.getPackageManager().getPackageUid(packageName, 0);
+            } catch (PackageManager.NameNotFoundException e) {
+                printLog("error: Package not found: " + packageName);
+            }
+        }
+        return -1;
+    }
+
+    public static void unfreeze(String target) {
+        Method method = sUnfreezeMethod;
+        if (method == null) {
+            return;
+        }
+        Object receiver = Modifier.isStatic(method.getModifiers()) ? null : sOplusProxyWakeLock;
+        if (!Modifier.isStatic(method.getModifiers()) && receiver == null) {
+            return;
+        }
+
+        int uid = getTargetUidFromPackageName(target);
+        if (uid < 0) {
+            return;
+        }
+
+        Object[] args = createUnfreezeArguments(method.getParameterTypes(), uid);
+        if (args == null) {
+            printLog("unsupported Oplus unfreeze arguments: " + describeMethod(method));
+            return;
+        }
+
+        try {
+            method.invoke(receiver, args);
+            printLog("unfreeze " + target + ", uid=" + uid, true);
+        } catch (InvocationTargetException e) {
+            Throwable cause = e.getCause() == null ? e : e.getCause();
+            printLog("Oplus unfreeze invocation failed: " + cause.getClass().getSimpleName()
+                    + ": " + cause.getMessage());
+        } catch (Throwable e) {
+            printLog("Oplus unfreeze invocation failed: " + e.getClass().getSimpleName()
+                    + ": " + e.getMessage());
+        }
+    }
+
+    public static void beginFcmDeliveryWindow(String target) {
+        int uid = getTargetUidFromPackageName(target);
+        if (uid < 0) return;
+
+        sFcmDeliveryWindows.begin(uid, SystemClock.elapsedRealtime());
+        sFcmDeliveryPackages.put(uid, target);
+        printLog("Oplus FCM delivery window: pkg=" + target + ", uid=" + uid
+                + ", duration=" + FCM_DELIVERY_WINDOW_MS + "ms", true);
+    }
+
+    static boolean isInFcmDeliveryWindow(int uid) {
+        if (sFcmDeliveryWindows.contains(uid, SystemClock.elapsedRealtime())) return true;
+        sFcmDeliveryPackages.remove(uid);
+        return false;
+    }
+
+    private static String getFcmDeliveryPackage(int uid) {
+        String packageName = sFcmDeliveryPackages.get(uid);
+        return packageName == null ? "uid:" + uid : packageName;
+    }
+
+    /** Prevent ColorOS background-network control from closing the target socket mid-push. */
+    private void startHookOAppNetControlService() {
+        Class<?> serviceClass = XposedHelpers.findClassIfExists(
+                OPLUS_APP_NET_CONTROL_SERVICE, classLoader);
+        if (serviceClass == null) throw new NoClassDefFoundError(OPLUS_APP_NET_CONTROL_SERVICE);
+
+        int hooks = 0;
+        for (Method method : serviceClass.getDeclaredMethods()) {
+            if (!"hansUpdateFirewallList".equals(method.getName())) continue;
+            Class<?>[] types = method.getParameterTypes();
+            if (types.length == 0 || !Pair.class.isAssignableFrom(types[0])) continue;
+
+            XposedBridge.hookMethod(method, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    if (param.args.length == 0 || !(param.args[0] instanceof Pair)) return;
+                    Pair<?, ?> update = (Pair<?, ?>) param.args[0];
+                    if (!(update.first instanceof Integer) || !(update.second instanceof Boolean)) {
+                        return;
+                    }
+                    int uid = (Integer) update.first;
+                    boolean networkRestore = (Boolean) update.second;
+                    if (!networkRestore && isInFcmDeliveryWindow(uid)) {
+                        // true is the restore/remove-from-firewall branch in ColorOS 16.
+                        param.args[0] = Pair.create(uid, true);
+                        printLog("Oplus FCM socket-close bypass: pkg="
+                                + getFcmDeliveryPackage(uid) + ", uid=" + uid, true);
+                    }
+                }
+            });
+            hooks++;
+            printLog("Oplus app network-control hook active: " + describeMethod(method));
+        }
+        if (hooks == 0) throw new NoSuchMethodError("hansUpdateFirewallList");
+    }
+
+    /** Keep Hans from refreezing the just-woken target while it handles the push. */
+    private void startHookHansFcmWindow() {
+        Class<?> sceneClass = XposedHelpers.findClassIfExists(OPLUS_HANS_SCENE_MANAGER, classLoader);
+        if (sceneClass == null) throw new NoClassDefFoundError(OPLUS_HANS_SCENE_MANAGER);
+
+        int hooks = 0;
+        for (Method method : sceneClass.getDeclaredMethods()) {
+            String name = method.getName();
+            if (!"freeze".equals(name)
+                    && !"freezeDirectlyForSceneCombo".equals(name)
+                    && !"freezeAndTransState".equals(name)
+                    && !"freezeViaSM".equals(name)) {
+                continue;
+            }
+            if (method.getParameterTypes().length == 0) continue;
+            boolean stateMachineOnly = "freezeViaSM".equals(name)
+                    && method.getReturnType() == void.class;
+            Object important = stateMachineOnly
+                    ? null : findEnumConstant(method.getReturnType(), "IMPORTANT");
+            if (!stateMachineOnly && important == null) continue;
+
+            final Object noFreezeResult = important;
+            XposedBridge.hookMethod(method, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    if (param.args.length == 0 || param.args[0] == null) return;
+                    int uid = getHansPackageUid(param.args[0]);
+                    if (uid >= 0 && isInFcmDeliveryWindow(uid)) {
+                        printLog("Oplus FCM Hans-freeze bypass: pkg="
+                                + getFcmDeliveryPackage(uid) + ", uid=" + uid
+                                + ", method=" + method.getName(), true);
+                        param.setResult(noFreezeResult);
+                    }
+                }
+            });
+            hooks++;
+            printLog("Oplus Hans FCM-window hook active: " + describeMethod(method));
+        }
+        if (hooks == 0) throw new NoSuchMethodError("HansSceneManager freeze methods");
+    }
+
+    /**
+     * The lock-screen Fast Freezer can bypass HansSceneManager's regular freeze methods on
+     * cgroup v2 devices. Intercept both the package freeze and the direct UID fast-freeze
+     * entry so an in-flight push cannot be suspended through that path either.
+     */
+    private void startHookHansCGroupFcmWindow() {
+        Class<?> cgroupClass = XposedHelpers.findClassIfExists(OPLUS_HANS_CGROUP, classLoader);
+        if (cgroupClass == null) throw new NoClassDefFoundError(OPLUS_HANS_CGROUP);
+
+        int hooks = 0;
+        for (Method method : cgroupClass.getDeclaredMethods()) {
+            if ("hansFreezeLocked".equals(method.getName())
+                    && isBooleanType(method.getReturnType())
+                    && method.getParameterTypes().length > 0
+                    && !method.getParameterTypes()[0].isPrimitive()) {
+                XposedBridge.hookMethod(method, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (param.args.length == 0 || param.args[0] == null) return;
+                        int uid = getHansPackageUid(param.args[0]);
+                        if (uid >= 0 && isInFcmDeliveryWindow(uid)) {
+                            printLog("Oplus FCM cgroup-freeze bypass: pkg="
+                                    + getFcmDeliveryPackage(uid) + ", uid=" + uid, true);
+                            param.setResult(false);
+                        }
+                    }
+                });
+                hooks++;
+                printLog("Oplus Hans cgroup hook active: " + describeMethod(method));
+            } else if (isFastFreezeEnter(method)) {
+                XposedBridge.hookMethod(method, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        int uid = (Integer) param.args[0];
+                        if (isInFcmDeliveryWindow(uid)) {
+                            printLog("Oplus FCM fast-freeze bypass: pkg="
+                                    + getFcmDeliveryPackage(uid) + ", uid=" + uid, true);
+                            param.setResult(null);
+                        }
+                    }
+                });
+                hooks++;
+                printLog("Oplus Hans fast-freezer hook active: " + describeMethod(method));
+            }
+        }
+        if (hooks == 0) throw new NoSuchMethodError("HansCGroup freeze methods");
+    }
+
+    private static boolean isFastFreezeEnter(Method method) {
+        String[] types = java.util.Arrays.stream(method.getParameterTypes())
+                .map(Class::getName).toArray(String[]::new);
+        return io.github.zopulus.ffc.util.HansSignature.isFastFreezeEnter(
+                method.getName(), method.getReturnType().getName(), types);
+    }
+
+    private int getHansPackageUid(Object hansPackage) {
+        try {
+            Object uid = XposedHelpers.callMethod(hansPackage, "getUid");
+            return uid instanceof Integer ? (Integer) uid : -1;
+        } catch (Throwable ignored) {
+            return -1;
+        }
+    }
+
+    private static Object[] createUnfreezeArguments(Class<?>[] types, int uid) {
+        Object[] args = new Object[types.length];
+        boolean uidAssigned = false;
+        for (int i = 0; i < types.length; i++) {
+            Class<?> type = types[i];
+            if (type == int.class || type == Integer.class) {
+                args[i] = uidAssigned ? 0 : uid;
+                uidAssigned = true;
+            } else if (WorkSource.class.isAssignableFrom(type)) {
+                args[i] = new WorkSource();
+            } else if (type == String.class || CharSequence.class.isAssignableFrom(type)) {
+                args[i] = "FCMFix";
+            } else if (type == boolean.class || type == Boolean.class) {
+                args[i] = false;
+            } else if (type == long.class || type == Long.class) {
+                args[i] = 0L;
+            } else if (type == float.class || type == Float.class) {
+                args[i] = 0F;
+            } else if (type == double.class || type == Double.class) {
+                args[i] = 0D;
+            } else if (!type.isPrimitive()) {
+                args[i] = null;
+            } else {
+                return null;
+            }
+        }
+        return uidAssigned ? args : null;
+    }
+
+    private void startHookUpdateGmsRestrict() {
+        int hooks = hookAllMethods("com.android.server.hans.scene.OplusBgSceneManager",
+                "updateGmsRestrict", null);
+        if (hooks == 0) throw new NoSuchMethodError("updateGmsRestrict");
+    }
+
+    private void startHookIsGoogleRestricInfoOn() {
+        int hooks = hookAllMethods(OPLUS_STARTUP_STRATEGY,
+                "isGoogleRestricInfoOn", Boolean.FALSE);
+        if (hooks == 0) throw new NoSuchMethodError("isGoogleRestricInfoOn");
+    }
+
+    /**
+     * ColorOS CN keeps per-component classify restriction lists that are skipped on the
+     * international build. This check runs before the normal broadcast/service allow-list
+     * decision, so only bypass it for an actual FCM intent addressed to an enabled target.
+     */
+    private void startHookAppClassifyRestricted() {
+        Class<?> strategyClass = XposedHelpers.findClassIfExists(OPLUS_STARTUP_STRATEGY, classLoader);
+        if (strategyClass == null) throw new NoClassDefFoundError(OPLUS_STARTUP_STRATEGY);
+
+        int hooks = 0;
+        for (Method method : strategyClass.getDeclaredMethods()) {
+            if (!"isAppClassifyRestricted".equals(method.getName())
+                    || !isBooleanType(method.getReturnType())) {
+                continue;
+            }
+            // ColorOS 17 adds isAppClassifyRestricted(int,String,String,Long), a per-user
+            // lookup with no Intent. It is not a delivery decision; skip it silently.
+            if (!java.util.Arrays.asList(method.getParameterTypes()).contains(Intent.class)) continue;
+            if (attributionIndex(method) < 0) {
+                logOnce("Unsupported Oplus delivery signature: " + describeMethod(method));
+                continue;
+            }
+            XposedBridge.hookMethod(method, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    Intent intent = findIntentArgument(param.args);
+                    if (intent == null || !isFCMIntent(intent)) return;
+
+                    String target = getIntentTarget(intent);
+                    if (target == null) target = findCalleePackage(param.args);
+                    if (trustedDelivery(intent, target, param)) {
+                        printLog("Oplus classify restriction bypass: pkg=" + target
+                                + ", action=" + intent.getAction(), true);
+                        param.setResult(false);
+                    }
+                }
+            });
+            hooks++;
+            printLog("Oplus classify hook active: " + describeMethod(method));
+        }
+        if (hooks == 0) throw new NoSuchMethodError("isAppClassifyRestricted");
+    }
+
+    /**
+     * On ColorOS 16 the GMS-to-app delivery path is tagged as type "bsgcm" and still
+     * passes through isAllowAutoStartByList even when google_restric_info is disabled.
+     */
+    private void startHookGcmBindService() {
+        Class<?> managerClass = XposedHelpers.findClassIfExists(OPLUS_APP_STARTUP_MANAGER, classLoader);
+        if (managerClass == null) throw new NoClassDefFoundError(OPLUS_APP_STARTUP_MANAGER);
+
+        int hooks = 0;
+        for (Method method : managerClass.getDeclaredMethods()) {
+            if (!"isAllowStartFromBindService".equals(method.getName())
+                    || !isBooleanType(method.getReturnType())) {
+                continue;
+            }
+            if (attributionIndex(method) < 0) {
+                logOnce("Unsupported Oplus delivery signature: " + describeMethod(method));
+                continue;
+            }
+            XposedBridge.hookMethod(method, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    if (!hasStringArgument(param.args, TYPE_BIND_SERVICE_FROM_GCM)
+                            && !hasStringArgument(param.args, START_PROCESS_FROM_GCM_BIND_SERVICE)) {
+                        return;
+                    }
+                    String target = findCalleePackage(param.args);
+                    if (trustedDelivery(findIntentArgument(param.args), target, param)) {
+                        printLog("Oplus GCM bind-service bypass: pkg=" + target, true);
+                        param.setResult(true);
+                    }
+                }
+            });
+            hooks++;
+            printLog("Oplus GCM bind hook active: " + describeMethod(method));
+        }
+        if (hooks == 0) throw new NoSuchMethodError("isAllowStartFromBindService");
+    }
+
+    /** Older Firebase delivery variants use startService instead of the GCM bind path. */
+    private void startHookFcmStartService() {
+        Class<?> managerClass = XposedHelpers.findClassIfExists(OPLUS_APP_STARTUP_MANAGER, classLoader);
+        if (managerClass == null) throw new NoClassDefFoundError(OPLUS_APP_STARTUP_MANAGER);
+
+        int hooks = 0;
+        for (Method method : managerClass.getDeclaredMethods()) {
+            if (!"isAllowStartFromStartService".equals(method.getName())
+                    || !isBooleanType(method.getReturnType())) {
+                continue;
+            }
+            if (attributionIndex(method) < 0) {
+                logOnce("Unsupported Oplus delivery signature: " + describeMethod(method));
+                continue;
+            }
+            XposedBridge.hookMethod(method, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    Intent intent = findIntentArgument(param.args);
+                    if (intent == null || !isFCMIntent(intent)) return;
+
+                    String target = findCalleePackage(param.args);
+                    if (trustedDelivery(intent, target, param)) {
+                        printLog("Oplus FCM start-service bypass: pkg=" + target
+                                + ", action=" + intent.getAction(), true);
+                        param.setResult(true);
+                    }
+                }
+            });
+            hooks++;
+            printLog("Oplus FCM start hook active: " + describeMethod(method));
+        }
+        if (hooks == 0) throw new NoSuchMethodError("isAllowStartFromStartService");
+    }
+
+    /**
+     * The CN ELSA policy gives GMS/GSF/Play a broad Hans prevent mask. Returning the
+     * framework's NOT_PROXY result here is the runtime equivalent of clearing that mask,
+     * without changing the XML or weakening restrictions for unrelated packages.
+     */
+    private void startHookHansGmsRestriction() {
+        Class<?> configClass = XposedHelpers.findClassIfExists(OPLUS_HANS_DB_CONFIG, classLoader);
+        if (configClass == null) throw new NoClassDefFoundError(OPLUS_HANS_DB_CONFIG);
+
+        int hooks = 0;
+        for (Method method : configClass.getDeclaredMethods()) {
+            if (!"isSysRestrictionCpn".equals(method.getName())) continue;
+            Object notProxy = findEnumConstant(method.getReturnType(), "NOT_PROXY");
+            if (notProxy == null) continue;
+
+            final Object finalNotProxy = notProxy;
+            XposedBridge.hookMethod(method, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    if (param.args.length == 0 || !(param.args[0] instanceof String)) return;
+                    String packageName = (String) param.args[0];
+                    if (getBooleanConfig("disableGoogleNetworkControl", true) && isGoogleCorePackage(packageName)) {
+                        printLog("Oplus Hans GMS restriction bypass: pkg=" + packageName, true);
+                        param.setResult(finalNotProxy);
+                    }
+                }
+            });
+            hooks++;
+            printLog("Oplus Hans restriction hook active: " + describeMethod(method));
+        }
+        if (hooks == 0) throw new NoSuchMethodError("isSysRestrictionCpn");
+    }
+
+    private int hookAllMethods(String className, String methodName, Object result) {
+        Class<?> clazz = XposedHelpers.findClassIfExists(className, classLoader);
+        if (clazz == null) return 0;
+        int hooks = 0;
+        for (Method method : clazz.getDeclaredMethods()) {
+            if (!methodName.equals(method.getName())) continue;
+            if (result == null && method.getReturnType() != void.class) {
+                continue;
+            }
+            if (result == Boolean.FALSE && method.getReturnType() != boolean.class
+                    && method.getReturnType() != Boolean.class) {
+                continue;
+            }
+            XposedBridge.hookMethod(method, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    if (isConfigurationReady() && getBooleanConfig("disableGoogleNetworkControl", true)) param.setResult(result);
+                }
+            });
+            hooks++;
+            printLog("Oplus restriction hook active: " + describeMethod(method));
+        }
+        return hooks;
+    }
+
+    private String getIntentTarget(Intent intent) {
+        if (intent.getComponent() != null) {
+            return intent.getComponent().getPackageName();
+        }
+        return intent.getPackage();
+    }
+
+    private String findAllowedPackageArgument(Object[] args) {
+        for (Object arg : args) {
+            if (arg instanceof String && targetIsAllow((String) arg)) {
+                return (String) arg;
+            }
+        }
+        return null;
+    }
+
+    private String findCalleePackage(Object[] args) {
+        Intent intent = findIntentArgument(args);
+        if (intent != null) {
+            String target = getIntentTarget(intent);
+            if (target != null) return target;
+        }
+        for (Object arg : args) {
+            if (arg instanceof ApplicationInfo) {
+                return ((ApplicationInfo) arg).packageName;
+            }
+            if (arg == null) continue;
+            try {
+                Object appInfo = XposedHelpers.getObjectField(arg, "appInfo");
+                if (appInfo instanceof ApplicationInfo) {
+                    return ((ApplicationInfo) appInfo).packageName;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return findAllowedPackageArgument(args);
+    }
+
+    private boolean hasStringArgument(Object[] args, String expected) {
+        for (Object arg : args) {
+            if (expected.equals(arg)) return true;
+        }
+        return false;
+    }
+
+    private boolean isBooleanType(Class<?> type) {
+        return type == boolean.class || type == Boolean.class;
+    }
+
+    private boolean isGoogleCorePackage(String packageName) {
+        return "com.google.android.gms".equals(packageName)
+                || "com.google.android.gsf".equals(packageName)
+                || "com.android.vending".equals(packageName);
+    }
+
+    private Object findEnumConstant(Class<?> type, String wantedName) {
+        if (!type.isEnum()) return null;
+        Object[] constants = type.getEnumConstants();
+        if (constants == null) return null;
+        for (Object constant : constants) {
+            if (wantedName.equals(((Enum<?>) constant).name())) return constant;
+        }
+        return null;
+    }
+
+    private Intent findIntentArgument(Object[] args) {
+        for (Object arg : args) {
+            if (arg instanceof Intent) {
+                return (Intent) arg;
+            }
+        }
+        for (Object arg : args) {
+            if (arg == null) continue;
+            try {
+                Object nestedIntent = XposedHelpers.getObjectField(arg, "intent");
+                if (nestedIntent instanceof Intent) {
+                    return (Intent) nestedIntent;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        return null;
+    }
+
+    private Object getNoProxyResult(Class<?> returnType) {
+        if (returnType == boolean.class || returnType == Boolean.class) {
+            return Boolean.FALSE;
+        }
+        if (returnType.isEnum()) {
+            Object[] constants = returnType.getEnumConstants();
+            if (constants != null) {
+                String[] preferred = new String[]{"NOT_INCLUDE", "NOT_PROXY", "ALLOW", "PASS"};
+                for (String name : preferred) {
+                    for (Object constant : constants) {
+                        if (name.equals(((Enum<?>) constant).name())) {
+                            return constant;
+                        }
+                    }
+                }
+            }
+        }
+        return UnsupportedResult.VALUE;
+    }
+
+    private enum UnsupportedResult { VALUE }
+
+    private static String describeMethod(Method method) {
+        StringBuilder result = new StringBuilder(method.getDeclaringClass().getName())
+                .append('#').append(method.getName()).append('(');
+        Class<?>[] types = method.getParameterTypes();
+        for (int i = 0; i < types.length; i++) {
+            if (i > 0) result.append(',');
+            result.append(types[i].getSimpleName());
+        }
+        return result.append("): ").append(method.getReturnType().getSimpleName()).toString();
+    }
+}
