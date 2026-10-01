@@ -27,6 +27,23 @@ public class ConfigSnapshotTest {
         values.put("deepSleepGoogleWhitelist", true);
         assertTrue(new ConfigSnapshot(values).options.get("rootDeepSleepNetworkWhitelist"));
     }
+    @Test public void dozeMigratesOldSettingAndRemainsIndependent() {
+        Map<String, Object> values = new HashMap<>();
+        values.put("deepSleepGoogleWhitelist", false);
+        assertFalse(new ConfigSnapshot(values).options.get("dozeGoogleWhitelist"));
+        values.put("dozeGoogleWhitelist", true);
+        values.put("rootDeepSleepNetworkWhitelist", true);
+        ConfigSnapshot snapshot = new ConfigSnapshot(values);
+        assertTrue(snapshot.options.get("dozeGoogleWhitelist"));
+        assertFalse(snapshot.options.get("rootDeepSleepNetworkWhitelist"));
+        values.put("deepSleepGoogleWhitelist", true);
+        values.put("dozeGoogleWhitelist", false);
+        snapshot = new ConfigSnapshot(values);
+        assertFalse(snapshot.options.get("dozeGoogleWhitelist"));
+        assertTrue(snapshot.options.get("rootDeepSleepNetworkWhitelist"));
+        values.put("dozeGoogleWhitelist", "true");
+        assertThrows(IllegalArgumentException.class, () -> new ConfigSnapshot(values));
+    }
     @Test public void missingOptionsUseSafeDefaults() {
         ConfigSnapshot snapshot = new ConfigSnapshot(Collections.emptyMap());
         assertTrue(snapshot.allowList.isEmpty());

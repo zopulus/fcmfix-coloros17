@@ -27,10 +27,11 @@ public final class ConfigSnapshot {
         }
         allowList = Collections.unmodifiableSet(packages);
         Map<String, Boolean> flags = new HashMap<>();
-        for (String key : new String[]{"disableAutoCleanNotification", "includeIceBoxDisableApp", "deepSleepGoogleWhitelist", "disableGoogleNetworkControl", "rootDeepSleepNetworkWhitelist"}) {
+        for (String key : new String[]{"disableAutoCleanNotification", "includeIceBoxDisableApp", "deepSleepGoogleWhitelist", "dozeGoogleWhitelist", "disableGoogleNetworkControl", "rootDeepSleepNetworkWhitelist"}) {
             Object value = values.get(key);
             if (value != null && !(value instanceof Boolean)) throw new IllegalArgumentException("Invalid " + key);
             boolean defaultValue = "deepSleepGoogleWhitelist".equals(key) || "disableGoogleNetworkControl".equals(key);
+            if ("dozeGoogleWhitelist".equals(key)) defaultValue = flags.get("deepSleepGoogleWhitelist");
             flags.put(key, value == null ? defaultValue : Boolean.TRUE.equals(value));
         }
         if (!flags.get("deepSleepGoogleWhitelist")) flags.put("rootDeepSleepNetworkWhitelist", false);

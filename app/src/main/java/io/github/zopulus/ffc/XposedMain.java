@@ -15,6 +15,7 @@ import io.github.zopulus.ffc.xposed.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
 
 public class XposedMain extends io.github.libxposed.api.XposedModule {
+    private boolean batteryHooksInitialized;
 
     @Override
     public void onSystemServerStarting(SystemServerStartingParam param) {
@@ -32,10 +33,13 @@ public class XposedMain extends io.github.libxposed.api.XposedModule {
     }
 
     @Override
-    public void onPackageReady(XposedModuleInterface.PackageReadyParam param) {
+    public synchronized void onPackageReady(XposedModuleInterface.PackageReadyParam param) {
         XposedBridge.init(this);
 
-        if ("com.oplus.battery".equals(param.getPackageName()) && param.isFirstPackage()) {
+        // Battery background services run in the shared Athena process on ColorOS17.
+        // Battery may be a secondary package; its own class loader is still required.
+        if ("com.oplus.battery".equals(param.getPackageName()) && !batteryHooksInitialized) {
+            batteryHooksInitialized = true;
             XposedModule.setSelfPackageName("com.oplus.battery");
             safeInit(() -> new OplusBatteryNetworkFix(param.getClassLoader()),
                     "OplusBatteryNetworkFix");

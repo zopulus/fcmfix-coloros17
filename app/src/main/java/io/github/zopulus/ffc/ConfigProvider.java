@@ -36,10 +36,11 @@ public class ConfigProvider extends ContentProvider {
             JSONObject json = ConfigFile.read(getContext());
             // Validate everything before publishing init=1 or any cursor rows.
             JSONArray packages = json.getJSONArray("allowList");
-            String[] options = {"disableAutoCleanNotification", "includeIceBoxDisableApp", "deepSleepGoogleWhitelist", "disableGoogleNetworkControl", "rootDeepSleepNetworkWhitelist"};
+            String[] options = {"disableAutoCleanNotification", "includeIceBoxDisableApp", "deepSleepGoogleWhitelist", "disableGoogleNetworkControl", "rootDeepSleepNetworkWhitelist", "dozeGoogleWhitelist"};
             boolean[] values = new boolean[options.length];
             for (int i = 0; i < options.length; i++) values[i] = json.has(options[i])
                     ? json.getBoolean(options[i]) : i == 2 || i == 3;
+            if (!json.has("dozeGoogleWhitelist")) values[5] = values[2];
             values[4] &= values[2];
             java.util.List<String> names = new java.util.ArrayList<>();
             for (int i = 0; i < packages.length(); i++) names.add(packages.getString(i));
@@ -59,10 +60,16 @@ public class ConfigProvider extends ContentProvider {
         if ("recordHookStatus".equals(method)) {
             int uid = Binder.getCallingUid();
             if (extras == null || uid == Process.myUid()) throw new SecurityException("Invalid hook status reporter");
-            String prefix = uid == Process.SYSTEM_UID ? "system" : "battery";
+            String reporter = extras.getString("reporter");
+            String prefix;
+            if ("android".equals(reporter) && uid == Process.SYSTEM_UID) prefix = "system";
+            else if ("com.oplus.battery".equals(reporter) && isBattery(uid)) prefix = "battery";
+            else throw new SecurityException("Invalid hook status source");
             status.edit().putInt(prefix + ".boot", boot)
                     .putInt(prefix + ".version", extras.getInt("version"))
                     .putBoolean(prefix + ".active", extras.getBoolean("active"))
+                    .putBoolean(prefix + ".doze", extras.getBoolean("doze"))
+                    .putBoolean(prefix + ".alarm", extras.getBoolean("alarm"))
                     .putBoolean(prefix + ".deepSleep", extras.getBoolean("deepSleep"))
                     .putBoolean(prefix + ".network", extras.getBoolean("network")).commit();
             return Bundle.EMPTY;
@@ -80,6 +87,10 @@ public class ConfigProvider extends ContentProvider {
                 needNetwork = config.optBoolean("disableGoogleNetworkControl", true);
             } catch (Exception ignored) {}
             Bundle result = new Bundle();
+            result.putBoolean("doze", system && status.getBoolean("system.doze", false));
+            result.putBoolean("alarm", system && status.getBoolean("system.alarm", false));
+            result.putBoolean("deepSleep", battery && status.getBoolean("battery.deepSleep", false));
+            result.putBoolean("network", battery && status.getBoolean("battery.network", false));
             result.putBoolean("active", system && (!needSleep || battery && status.getBoolean("battery.deepSleep", false))
                     && (!needNetwork || battery && status.getBoolean("battery.network", false)));
             return result;

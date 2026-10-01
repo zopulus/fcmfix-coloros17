@@ -9,15 +9,17 @@ import java.util.List;
 
 /** Restores only the Google entries omitted by the ColorOS CN regional Doze list. */
 public class OplusDeviceIdleFix extends XposedModule {
+    private static volatile boolean dozeInstalled, alarmInstalled;
+    public static boolean hasDozeHook() { return dozeInstalled; }
+    public static boolean hasAlarmHook() { return alarmInstalled; }
 
     private static final String OPLUS_DEVICE_IDLE_HELPER =
             "com.android.server.OplusDeviceIdleHelper";
-    private static final String OPLUS_GOOGLE_RESTRICTION_HELPER =
-            "com.android.server.OplusGoogleRestrictionHelper";
+    private static final String OPLUS_GOOGLE_ALARM_RESTRICT =
+            "com.android.server.alarm.OplusGoogleAlarmRestrict";
     private static final String[] GOOGLE_DOZE_PACKAGES = new String[]{
             "com.google.android.gms",
-            "com.google.android.gsf",
-            "com.android.vending"
+            "com.google.android.gsf"
     };
 
     public OplusDeviceIdleFix(ClassLoader classLoader) {
@@ -37,33 +39,43 @@ public class OplusDeviceIdleFix extends XposedModule {
     }
 
     /**
-     * ColorOS 17 OplusGoogleAlarmRestrict turns GMS *_WAKEUP alarms into non-wakeup ones
-     * while this helper reports Google as restricted, which stalls the FCM heartbeat in
-     * Doze. The battery-side hook clears the source broadcast; this covers a missing
-     * battery scope. Reporting "not restricted" also restores already-downgraded alarms.
+     * Always protect the original wakeup type at the alarm-specific downgrade path.
+     * Alarm.wakeup retains the original request when ColorOS changes type 0/2 to 1/3.
+     * Do not alter the shared Google restriction state or consult module configuration.
      */
-    private void startHookGoogleAlarmRestrict() {
-        Class<?> helperClass = XposedHelpers.findClassIfExists(
-                OPLUS_GOOGLE_RESTRICTION_HELPER, classLoader);
-        if (helperClass == null) throw new NoClassDefFoundError(OPLUS_GOOGLE_RESTRICTION_HELPER);
-
-        int hooks = 0;
-        for (Method method : helperClass.getDeclaredMethods()) {
-            if (!"isGoogleRestrct".equals(method.getName())
-                    || method.getParameterTypes().length != 0
-                    || method.getReturnType() != boolean.class) {
-                continue;
-            }
-            XposedBridge.hookMethod(method, new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) {
-                    if (isConfigurationReady() && getBooleanConfig("disableGoogleNetworkControl", true)) param.setResult(false);
-                }
-            });
-            hooks++;
-            printLog("Oplus Google alarm restriction hook active: " + describeMethod(method));
-        }
-        if (hooks == 0) throw new NoSuchMethodError(OPLUS_GOOGLE_RESTRICTION_HELPER + "#isGoogleRestrct");
+    private void startHookGoogleAlarmRestrict() throws ReflectiveOperationException {
+        Class<?> restrictClass = XposedHelpers.findClass(OPLUS_GOOGLE_ALARM_RESTRICT, classLoader);
+        Class<?> alarmClass = XposedHelpers.findClass("com.android.server.alarm.Alarm", classLoader);
+        final java.lang.reflect.Field type = alarmClass.getDeclaredField("type");
+        final java.lang.reflect.Field wakeup = alarmClass.getDeclaredField("wakeup");
+        final java.lang.reflect.Field operation = alarmClass.getDeclaredField("operation");
+        final java.lang.reflect.Field listenerTag = alarmClass.getDeclaredField("listenerTag");
+        final java.lang.reflect.Field statsTag = alarmClass.getDeclaredField("statsTag");
+        for (java.lang.reflect.Field field : new java.lang.reflect.Field[]{
+                type, wakeup, operation, listenerTag, statsTag}) field.setAccessible(true);
+        final Method makeTag = XposedHelpers.findMethodExact(
+                alarmClass, "makeTag", android.app.PendingIntent.class, String.class, int.class);
+        XposedHelpers.findAndHookMethod(restrictClass, "updateGoogleAlarmTypeAndTag",
+                alarmClass, new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        Object alarm = param.args[0];
+                        if (alarm != null && wakeup.getBoolean(alarm)) {
+                            int currentType = type.getInt(alarm);
+                            // Restore only an alarm originally requested as a wakeup alarm.
+                            if (currentType == 1 || currentType == 3) {
+                                int restoredType = currentType - 1;
+                                Object restoredTag = makeTag.invoke(null, operation.get(alarm),
+                                        listenerTag.get(alarm), restoredType);
+                                type.setInt(alarm, restoredType);
+                                statsTag.set(alarm, restoredTag);
+                            }
+                        }
+                        param.setResult(null);
+                    }
+                });
+        alarmInstalled = true;
+        printLog("Oplus Google wakeup alarm protection active (always enabled)");
     }
 
     private void startHook() {
@@ -80,7 +92,7 @@ public class OplusDeviceIdleFix extends XposedModule {
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) {
-                        if (!isConfigurationReady() || !getBooleanConfig("deepSleepGoogleWhitelist", true)) return;
+                        if (!isConfigurationReady() || !getBooleanConfig("dozeGoogleWhitelist", true)) return;
                         List<String> whiteList = findListArgument(param.args);
                         if (whiteList == null && param.getResult() instanceof List) {
                             whiteList = (List<String>) param.getResult();
@@ -111,6 +123,7 @@ public class OplusDeviceIdleFix extends XposedModule {
             }
         }
         if (whitelistHooks == 0) throw new NoSuchMethodError("getNewWhiteList");
+        dozeInstalled = true;
         if (restrictSwitchHooks == 0) {
             printLog("OplusDeviceIdleHelper#getGoogleRestrictSwitch not found");
         }

@@ -294,6 +294,7 @@ private fun HomeScreen(
     val allowedFcmCount = fcmApps.count { it.packageName in config.allowedPackages }
     val enabledGoogleProtections = listOf(
         config.deepSleepGoogleWhitelist,
+        config.dozeGoogleWhitelist,
         config.disableGoogleNetworkControl
     ).count { it }
 
@@ -320,7 +321,7 @@ private fun HomeScreen(
                 HomeInfoItem(
                     icon = ImageVector.vectorResource(R.drawable.ic_shield),
                     title = "Google 联网保护",
-                    summary = "$enabledGoogleProtections / 2 项已启用",
+                    summary = "$enabledGoogleProtections / 3 项已启用",
                     onClick = onOpenSettings
                 )
             )
@@ -781,7 +782,7 @@ private fun SettingsScreen(
                 items = listOf(
                     SettingEntry(
                         icon = ImageVector.vectorResource(R.drawable.ic_bedtime),
-                        title = "睡眠待机优化白名单",
+                        title = "深度睡眠联网白名单",
                         summary = "将 GMS 和 GSF 加入联网白名单",
                         checked = config.deepSleepGoogleWhitelist,
                         onCheckedChange = { enabled ->
@@ -794,12 +795,21 @@ private fun SettingsScreen(
                     SettingEntry(
                         icon = ImageVector.vectorResource(R.drawable.ic_terminal),
                         title = "待机优化白名单 UID 0",
-                        summary = if (config.deepSleepGoogleWhitelist) "将 Root 下所有进程加入联网白名单" else "请先开启睡眠待机优化白名单",
+                        summary = if (config.deepSleepGoogleWhitelist) "将 Root 下所有进程加入联网白名单" else "请先开启深度睡眠联网白名单",
                         checked = config.deepSleepGoogleWhitelist && config.rootDeepSleepNetworkWhitelist,
                         enabled = config.deepSleepGoogleWhitelist,
                         onCheckedChange = { enabled ->
                             if (enabled) showRootWarning = true
                             else onConfigChange(config.copy(rootDeepSleepNetworkWhitelist = false))
+                        }
+                    ),
+                    SettingEntry(
+                        icon = ImageVector.vectorResource(R.drawable.ic_hourglass),
+                        title = "Doze 待机白名单",
+                        summary = "将 GMS 和 GSF 加入待机白名单",
+                        checked = config.dozeGoogleWhitelist,
+                        onCheckedChange = { enabled ->
+                            onConfigChange(config.copy(dozeGoogleWhitelist = enabled))
                         }
                     ),
                     SettingEntry(

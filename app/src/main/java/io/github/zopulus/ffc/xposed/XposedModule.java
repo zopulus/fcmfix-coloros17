@@ -280,6 +280,9 @@ public abstract class XposedModule {
         try {
             Bundle status = new Bundle();
             status.putInt("version", io.github.zopulus.ffc.BuildConfig.VERSION_CODE);
+            status.putString("reporter", getSelfPackageName());
+            status.putBoolean("doze", OplusDeviceIdleFix.hasDozeHook());
+            status.putBoolean("alarm", OplusDeviceIdleFix.hasAlarmHook());
             if ("android".equals(getSelfPackageName())) status.putBoolean("active", BroadcastFix.isInstalled());
             else {
                 status.putBoolean("deepSleep", OplusBatteryNetworkFix.hasDeepSleepHook());
@@ -321,6 +324,7 @@ public abstract class XposedModule {
             boolean disableAutoCleanNotification = false;
             boolean includeIceBoxDisableApp = false;
             boolean deepSleepGoogleWhitelist = true;
+            Boolean dozeGoogleWhitelist = null;
             boolean disableGoogleNetworkControl = true;
             boolean rootDeepSleepNetworkWhitelist = false;
             cursor.moveToFirst();
@@ -339,6 +343,8 @@ public abstract class XposedModule {
                     includeIceBoxDisableApp = "1".equals(value);
                 } else if ("deepSleepGoogleWhitelist".equals(key)) {
                     deepSleepGoogleWhitelist = "1".equals(value);
+                } else if ("dozeGoogleWhitelist".equals(key)) {
+                    dozeGoogleWhitelist = "1".equals(value);
                 } else if ("disableGoogleNetworkControl".equals(key)) {
                     disableGoogleNetworkControl = "1".equals(value);
                 } else if ("rootDeepSleepNetworkWhitelist".equals(key)) {
@@ -354,6 +360,7 @@ public abstract class XposedModule {
             values.put("disableAutoCleanNotification", disableAutoCleanNotification);
             values.put("includeIceBoxDisableApp", includeIceBoxDisableApp);
             values.put("deepSleepGoogleWhitelist", deepSleepGoogleWhitelist);
+            values.put("dozeGoogleWhitelist", dozeGoogleWhitelist == null ? deepSleepGoogleWhitelist : dozeGoogleWhitelist);
             values.put("disableGoogleNetworkControl", disableGoogleNetworkControl);
             values.put("rootDeepSleepNetworkWhitelist", rootDeepSleepNetworkWhitelist);
             ConfigSnapshot snapshot = new ConfigSnapshot(values);
