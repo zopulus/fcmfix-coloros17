@@ -44,7 +44,6 @@ private const val TAG = "fcmfix-ui"
 private const val ACTION_UPDATE_CONFIG = "io.github.zopulus.ffc.update.config"
 private const val KEY_DOZE_GOOGLE_WHITELIST = "dozeGoogleWhitelist"
 private const val KEY_DEEP_SLEEP_GOOGLE_WHITELIST = "deepSleepGoogleWhitelist"
-private const val KEY_DISABLE_GOOGLE_NETWORK_CONTROL = "disableGoogleNetworkControl"
 private const val KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST = "rootDeepSleepNetworkWhitelist"
 private const val KEY_DISABLE_AUTO_CLEAN_NOTIFICATION = "disableAutoCleanNotification"
 private const val KEY_INCLUDE_ICEBOX_DISABLED_APP = "includeIceBoxDisableApp"
@@ -55,7 +54,6 @@ data class FcmfixConfig(
     val includeIceBoxDisabledApps: Boolean = false,
     val deepSleepGoogleWhitelist: Boolean = true,
     val dozeGoogleWhitelist: Boolean = true,
-    val disableGoogleNetworkControl: Boolean = true,
     val rootDeepSleepNetworkWhitelist: Boolean = false
 )
 
@@ -280,7 +278,6 @@ class MainActivity : ComponentActivity() {
             includeIceBoxDisabledApps = json.optBoolean(KEY_INCLUDE_ICEBOX_DISABLED_APP, false),
             deepSleepGoogleWhitelist = json.optBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, true),
             dozeGoogleWhitelist = json.optBoolean(KEY_DOZE_GOOGLE_WHITELIST, json.optBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, true)),
-            disableGoogleNetworkControl = json.optBoolean(KEY_DISABLE_GOOGLE_NETWORK_CONTROL, true),
             rootDeepSleepNetworkWhitelist = json.optBoolean(KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST, false)
         )
     }
@@ -291,7 +288,6 @@ class MainActivity : ComponentActivity() {
         includeIceBoxDisabledApps = preferences.getBoolean(KEY_INCLUDE_ICEBOX_DISABLED_APP, false),
         deepSleepGoogleWhitelist = preferences.getBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, true),
             dozeGoogleWhitelist = preferences.getBoolean(KEY_DOZE_GOOGLE_WHITELIST, preferences.getBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, true)),
-        disableGoogleNetworkControl = preferences.getBoolean(KEY_DISABLE_GOOGLE_NETWORK_CONTROL, true),
         rootDeepSleepNetworkWhitelist = preferences.getBoolean(KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST, false)
     )
 
@@ -312,7 +308,6 @@ class MainActivity : ComponentActivity() {
                     includeIceBoxDisabledApps = json.optBoolean(KEY_INCLUDE_ICEBOX_DISABLED_APP, false),
                     deepSleepGoogleWhitelist = json.optBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, true),
             dozeGoogleWhitelist = json.optBoolean(KEY_DOZE_GOOGLE_WHITELIST, json.optBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, true)),
-                    disableGoogleNetworkControl = json.optBoolean(KEY_DISABLE_GOOGLE_NETWORK_CONTROL, true),
                     rootDeepSleepNetworkWhitelist = json.optBoolean(KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST, false)
                 ),
                 configSource = ConfigSource.LOCAL
@@ -356,6 +351,7 @@ class MainActivity : ComponentActivity() {
 
     private fun saveRemote(config: FcmfixConfig, revision: Long): Boolean = try {
         xposedService?.getRemotePreferences("config")?.edit()
+            ?.remove("disableGoogleNetworkControl")
             ?.putBoolean("init", true)
             ?.putLong("revision", revision)
             ?.putStringSet("allowList", config.allowedPackages.toMutableSet())
@@ -363,7 +359,6 @@ class MainActivity : ComponentActivity() {
             ?.putBoolean(KEY_INCLUDE_ICEBOX_DISABLED_APP, config.includeIceBoxDisabledApps)
             ?.putBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, config.deepSleepGoogleWhitelist)
             ?.putBoolean(KEY_DOZE_GOOGLE_WHITELIST, config.dozeGoogleWhitelist)
-            ?.putBoolean(KEY_DISABLE_GOOGLE_NETWORK_CONTROL, config.disableGoogleNetworkControl)
             ?.putBoolean(KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST, config.rootDeepSleepNetworkWhitelist)
             ?.commit() ?: false
     } catch (error: Throwable) {
@@ -377,7 +372,6 @@ class MainActivity : ComponentActivity() {
         .put(KEY_INCLUDE_ICEBOX_DISABLED_APP, includeIceBoxDisabledApps)
         .put(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, deepSleepGoogleWhitelist)
         .put(KEY_DOZE_GOOGLE_WHITELIST, dozeGoogleWhitelist)
-        .put(KEY_DISABLE_GOOGLE_NETWORK_CONTROL, disableGoogleNetworkControl)
         .put(KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST, rootDeepSleepNetworkWhitelist)
 
     private fun loadInstalledApps() {

@@ -9,9 +9,11 @@ import java.util.List;
 
 /** Restores only the Google entries omitted by the ColorOS CN regional Doze list. */
 public class OplusDeviceIdleFix extends XposedModule {
-    private static volatile boolean dozeInstalled, alarmInstalled;
+    private static volatile boolean dozeInstalled, alarmInstalled, deepSleepAlarmInstalled;
     public static boolean hasDozeHook() { return dozeInstalled; }
     public static boolean hasAlarmHook() { return alarmInstalled; }
+
+    public static boolean hasDeepSleepAlarmHook() { return deepSleepAlarmInstalled; }
 
     private static final String OPLUS_DEVICE_IDLE_HELPER =
             "com.android.server.OplusDeviceIdleHelper";
@@ -30,6 +32,7 @@ public class OplusDeviceIdleFix extends XposedModule {
             printLog("hook error OplusDeviceIdleFix: "
                     + e.getClass().getSimpleName() + ": " + e.getMessage());
         }
+        try { startHookDeepSleepAlarm(); } catch (Throwable e) { printLog("Deep-sleep alarm protection unavailable: " + e); }
         try {
             startHookGoogleAlarmRestrict();
         } catch (Throwable e) {
@@ -78,6 +81,32 @@ public class OplusDeviceIdleFix extends XposedModule {
         printLog("Oplus Google wakeup alarm protection active (always enabled)");
     }
 
+    /** Separate from alarm type protection: prevent holding Google wakeups for network restore. */
+    private void startHookDeepSleepAlarm() throws ReflectiveOperationException {
+        Class<?> alarmClass = XposedHelpers.findClass("com.android.server.alarm.Alarm", classLoader);
+        final java.lang.reflect.Field packageName = alarmClass.getDeclaredField("packageName");
+        final java.lang.reflect.Field wakeup = alarmClass.getDeclaredField("wakeup");
+        packageName.setAccessible(true);
+        wakeup.setAccessible(true);
+        XposedHelpers.findAndHookMethod("com.android.server.alarm.OplusDeepSleepHelper", classLoader,
+                "filterDeepSleepAlarm", alarmClass, new XC_MethodHook() {
+                    @Override protected void afterHookedMethod(MethodHookParam param) {
+                        if (param.hasThrowable() || !Boolean.TRUE.equals(param.getResult()) || param.args[0] == null) return;
+                        try {
+                            Object alarm = param.args[0];
+                            Object name = packageName.get(alarm);
+                            if (wakeup.getBoolean(alarm) && (GOOGLE_DOZE_PACKAGES[0].equals(name)
+                                    || GOOGLE_DOZE_PACKAGES[1].equals(name))) {
+                                param.setResult(false);
+                                printLog("Oplus deep-sleep wakeup alarm released: " + name, true);
+                            }
+                        } catch (Throwable e) { logOnce("Unsupported deep-sleep alarm: " + e); }
+                    }
+                });
+        deepSleepAlarmInstalled = true;
+        printLog("Oplus deep-sleep wakeup alarm protection active (always enabled)");
+    }
+
     private void startHook() {
         Class<?> helperClass = XposedHelpers.findClassIfExists(
                 OPLUS_DEVICE_IDLE_HELPER, classLoader);
@@ -115,7 +144,7 @@ public class OplusDeviceIdleFix extends XposedModule {
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        if (isConfigurationReady() && getBooleanConfig("disableGoogleNetworkControl", true)) param.setResult(false);
+                        param.setResult(false);
                     }
                 });
                 restrictSwitchHooks++;

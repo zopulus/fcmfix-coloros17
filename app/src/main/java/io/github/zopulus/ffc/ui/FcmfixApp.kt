@@ -293,8 +293,7 @@ private fun HomeScreen(
     val allowedFcmCount = fcmApps.count { it.packageName in config.allowedPackages }
     val enabledGoogleProtections = listOf(
         config.deepSleepGoogleWhitelist,
-        config.dozeGoogleWhitelist,
-        config.disableGoogleNetworkControl
+        config.dozeGoogleWhitelist
     ).count { it }
 
     Column(
@@ -320,7 +319,7 @@ private fun HomeScreen(
                 HomeInfoItem(
                     icon = ImageVector.vectorResource(R.drawable.ic_shield),
                     title = "Google 联网保护",
-                    summary = "$enabledGoogleProtections / 3 项已启用",
+                    summary = "$enabledGoogleProtections / 2 项已启用",
                     onClick = onOpenSettings
                 )
             )
@@ -814,13 +813,6 @@ private fun SettingsScreen(
                         onCheckedChange = { enabled ->
                             onConfigChange(config.copy(dozeGoogleWhitelist = enabled))
                         }
-                    ),
-                    SettingEntry(
-                        icon = ImageVector.vectorResource(R.drawable.ic_wifi),
-                        title = "解除 Google 网络限制",
-                        summary = "解除 ColorOS 对 Google 服务的网络限制",
-                        checked = config.disableGoogleNetworkControl,
-                        onCheckedChange = { onConfigChange(config.copy(disableGoogleNetworkControl = it)) }
                     )
                 )
             )

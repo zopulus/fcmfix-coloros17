@@ -36,12 +36,12 @@ public class ConfigProvider extends ContentProvider {
             JSONObject json = ConfigFile.read(getContext());
             // Validate everything before publishing init=1 or any cursor rows.
             JSONArray packages = json.getJSONArray("allowList");
-            String[] options = {"disableAutoCleanNotification", "includeIceBoxDisableApp", "deepSleepGoogleWhitelist", "disableGoogleNetworkControl", "rootDeepSleepNetworkWhitelist", "dozeGoogleWhitelist"};
+            String[] options = {"disableAutoCleanNotification", "includeIceBoxDisableApp", "deepSleepGoogleWhitelist", "rootDeepSleepNetworkWhitelist", "dozeGoogleWhitelist"};
             boolean[] values = new boolean[options.length];
             for (int i = 0; i < options.length; i++) values[i] = json.has(options[i])
-                    ? json.getBoolean(options[i]) : i == 2 || i == 3;
-            if (!json.has("dozeGoogleWhitelist")) values[5] = values[2];
-            values[4] &= values[2];
+                    ? json.getBoolean(options[i]) : i == 2;
+            if (!json.has("dozeGoogleWhitelist")) values[4] = values[2];
+            values[3] &= values[2];
             java.util.List<String> names = new java.util.ArrayList<>();
             for (int i = 0; i < packages.length(); i++) names.add(packages.getString(i));
             long revision = json.optLong("revision", 0);
@@ -70,29 +70,44 @@ public class ConfigProvider extends ContentProvider {
                     .putBoolean(prefix + ".active", extras.getBoolean("active"))
                     .putBoolean(prefix + ".doze", extras.getBoolean("doze"))
                     .putBoolean(prefix + ".alarm", extras.getBoolean("alarm"))
+                    .putBoolean(prefix + ".deepSleepAlarm", extras.getBoolean("deepSleepAlarm"))
+                    .putString(prefix + ".oplusProtections", extras.getString("oplusProtections", ""))
                     .putBoolean(prefix + ".deepSleep", extras.getBoolean("deepSleep"))
-                    .putBoolean(prefix + ".network", extras.getBoolean("network")).commit();
+                    .putBoolean(prefix + ".network", extras.getBoolean("network"))
+                    .putString(prefix + ".networkPolicyState", extras.getString("networkPolicyState", "pending"))
+                    .putString(prefix + ".networkPolicyDetail", extras.getString("networkPolicyDetail", "")).commit();
             return Bundle.EMPTY;
         }
         if ("hookStatus".equals(method)) {
-            boolean system = status.getInt("system.boot", -2) == boot
-                    && status.getInt("system.version", -1) == BuildConfig.VERSION_CODE
+            boolean system = io.github.zopulus.ffc.util.HookHealth.isCurrent(status.getInt("system.boot", -2),
+                    status.getInt("system.version", -1), boot, BuildConfig.VERSION_CODE)
                     && status.getBoolean("system.active", false);
-            boolean battery = status.getInt("battery.boot", -2) == boot
-                    && status.getInt("battery.version", -1) == BuildConfig.VERSION_CODE;
-            boolean needSleep = true, needNetwork = true;
+            boolean battery = io.github.zopulus.ffc.util.HookHealth.isCurrent(status.getInt("battery.boot", -2),
+                    status.getInt("battery.version", -1), boot, BuildConfig.VERSION_CODE);
+            boolean needSleep = true, needDoze = true;
             try {
                 JSONObject config = ConfigFile.read(getContext());
                 needSleep = config.optBoolean("deepSleepGoogleWhitelist", true);
-                needNetwork = config.optBoolean("disableGoogleNetworkControl", true);
+                needDoze = config.optBoolean("dozeGoogleWhitelist", needSleep);
             } catch (Exception ignored) {}
             Bundle result = new Bundle();
             result.putBoolean("doze", system && status.getBoolean("system.doze", false));
             result.putBoolean("alarm", system && status.getBoolean("system.alarm", false));
+            result.putBoolean("deepSleepAlarm", system && status.getBoolean("system.deepSleepAlarm", false));
+            result.putString("oplusProtections", system ? status.getString("system.oplusProtections", "") : "");
             result.putBoolean("deepSleep", battery && status.getBoolean("battery.deepSleep", false));
             result.putBoolean("network", battery && status.getBoolean("battery.network", false));
-            result.putBoolean("active", system && (!needSleep || battery && status.getBoolean("battery.deepSleep", false))
-                    && (!needNetwork || battery && status.getBoolean("battery.network", false)));
+            String missing = io.github.zopulus.ffc.util.HookHealth.missing(
+                    result.getString("oplusProtections", ""), needDoze, needSleep,
+                    result.getBoolean("doze"), result.getBoolean("alarm"), result.getBoolean("deepSleepAlarm"),
+                    result.getBoolean("deepSleep"), result.getBoolean("network"));
+            String policyState = battery ? status.getString("battery.networkPolicyState", "pending") : "pending";
+            result.putString("missingHooks", missing);
+            result.putString("networkPolicyState", policyState);
+            result.putString("networkPolicyDetail", battery ? status.getString("battery.networkPolicyDetail", "") : "Awaiting current boot report");
+            result.putBoolean("hooksInstalled", system && battery && missing.isEmpty());
+            result.putBoolean("networkPolicyVerified", "verified".equals(policyState));
+            result.putBoolean("active", io.github.zopulus.ffc.util.HookHealth.isHealthy(system, battery, missing, policyState));
             return result;
         }
         if ("activateFrozenApp".equals(method)) {

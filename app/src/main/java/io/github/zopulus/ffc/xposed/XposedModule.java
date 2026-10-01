@@ -222,6 +222,11 @@ public abstract class XposedModule {
         }
     };
 
+    protected static boolean isDeliveryTargetAllowed(String packageName) {
+        ConfigSnapshot snapshot = config;
+        return snapshot != null && packageName != null && snapshot.allowList.contains(packageName);
+    }
+
     protected boolean targetIsAllow(String packageName) {
         ConfigSnapshot snapshot = config;
         if (snapshot == null) checkUserDeviceUnlockAndUpdateConfig();
@@ -274,7 +279,7 @@ public abstract class XposedModule {
         if (!loaded && failure != null) throw failure;
     }
 
-    private static void reportHookStatus() {
+    protected static void reportHookStatus() {
         if (context == null) return;
         long identity = android.os.Binder.clearCallingIdentity();
         try {
@@ -283,10 +288,14 @@ public abstract class XposedModule {
             status.putString("reporter", getSelfPackageName());
             status.putBoolean("doze", OplusDeviceIdleFix.hasDozeHook());
             status.putBoolean("alarm", OplusDeviceIdleFix.hasAlarmHook());
+            status.putBoolean("deepSleepAlarm", OplusDeviceIdleFix.hasDeepSleepAlarmHook());
+            status.putString("oplusProtections", OplusProxyFix.installedProtections());
             if ("android".equals(getSelfPackageName())) status.putBoolean("active", BroadcastFix.isInstalled());
             else {
                 status.putBoolean("deepSleep", OplusBatteryNetworkFix.hasDeepSleepHook());
                 status.putBoolean("network", OplusBatteryNetworkFix.hasNetworkHooks());
+                status.putString("networkPolicyState", OplusBatteryNetworkFix.networkPolicyState());
+                status.putString("networkPolicyDetail", OplusBatteryNetworkFix.networkPolicyDetail());
             }
             context.getContentResolver().call(Uri.parse("content://" + SELF_PACKAGE_NAME + ".provider"), "recordHookStatus", null, status);
         } catch (Throwable error) { logOnce("Cannot report hook status: " + error); }
@@ -325,7 +334,6 @@ public abstract class XposedModule {
             boolean includeIceBoxDisableApp = false;
             boolean deepSleepGoogleWhitelist = true;
             Boolean dozeGoogleWhitelist = null;
-            boolean disableGoogleNetworkControl = true;
             boolean rootDeepSleepNetworkWhitelist = false;
             cursor.moveToFirst();
             do {
@@ -345,8 +353,6 @@ public abstract class XposedModule {
                     deepSleepGoogleWhitelist = "1".equals(value);
                 } else if ("dozeGoogleWhitelist".equals(key)) {
                     dozeGoogleWhitelist = "1".equals(value);
-                } else if ("disableGoogleNetworkControl".equals(key)) {
-                    disableGoogleNetworkControl = "1".equals(value);
                 } else if ("rootDeepSleepNetworkWhitelist".equals(key)) {
                     rootDeepSleepNetworkWhitelist = "1".equals(value);
                 }
@@ -361,7 +367,6 @@ public abstract class XposedModule {
             values.put("includeIceBoxDisableApp", includeIceBoxDisableApp);
             values.put("deepSleepGoogleWhitelist", deepSleepGoogleWhitelist);
             values.put("dozeGoogleWhitelist", dozeGoogleWhitelist == null ? deepSleepGoogleWhitelist : dozeGoogleWhitelist);
-            values.put("disableGoogleNetworkControl", disableGoogleNetworkControl);
             values.put("rootDeepSleepNetworkWhitelist", rootDeepSleepNetworkWhitelist);
             ConfigSnapshot snapshot = new ConfigSnapshot(values);
             if (config == null || snapshot.revision >= config.revision) config = snapshot;

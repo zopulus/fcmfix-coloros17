@@ -39,6 +39,12 @@ public final class FcmTrust {
         return gms || (!RECEIVE.equals(action) && selfInWindow);
     }
 
+    public static boolean allowsJob(String deliveryPackage, String requestedPackage,
+                                    String jobPackage, boolean allowed, boolean inWindow) {
+        return allowed && inWindow && deliveryPackage != null
+                && deliveryPackage.equals(requestedPackage) && deliveryPackage.equals(jobPackage);
+    }
+
     public static String target(String packageName, String componentPackage) {
         if (componentPackage != null && packageName != null && !componentPackage.equals(packageName)) {
             return null;

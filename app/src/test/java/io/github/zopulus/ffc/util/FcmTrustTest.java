@@ -12,6 +12,16 @@ public class FcmTrustTest {
         assertFalse(FcmTrust.allowsEntry(FcmTrust.RECEIVE, "", true, true));
         assertFalse(FcmTrust.allowsEntry("evil.android.c2dm.intent.RECEIVE", "target", true, true));
     }
+    @Test public void jobRequiresCurrentPermissionAndMatchingPackages() {
+        assertTrue(FcmTrust.allowsJob("target", "target", "target", true, true));
+        assertFalse(FcmTrust.allowsJob("target", "target", "target", false, true));
+        assertFalse(FcmTrust.allowsJob("target", "target", "target", true, false));
+        assertFalse(FcmTrust.allowsJob("target", "sharedUidSibling", "sharedUidSibling", true, true));
+        assertFalse(FcmTrust.allowsJob("target", "target", "sharedUidSibling", true, true));
+        assertFalse(FcmTrust.allowsJob("target", "target", null, true, true));
+        assertFalse(FcmTrust.allowsJob(null, "target", "target", true, true));
+    }
+
     @Test public void destinationMustBeExplicitAndCoherent() {
         assertEquals("target", FcmTrust.target(null, "target"));
         assertEquals("target", FcmTrust.target("target", null));

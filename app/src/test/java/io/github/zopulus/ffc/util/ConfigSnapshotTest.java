@@ -14,7 +14,7 @@ public class ConfigSnapshotTest {
     @Test public void localGoogleFlagsKeepDefaultsAndRespectOverrides() {
         ConfigSnapshot defaults = new ConfigSnapshot(Collections.emptyMap());
         assertTrue(defaults.options.get("deepSleepGoogleWhitelist"));
-        assertTrue(defaults.options.get("disableGoogleNetworkControl"));
+        assertFalse(defaults.options.containsKey("disableGoogleNetworkControl"));
         assertFalse(defaults.options.get("rootDeepSleepNetworkWhitelist"));
         Map<String, Object> values = new HashMap<>();
         values.put("deepSleepGoogleWhitelist", false);
@@ -22,7 +22,7 @@ public class ConfigSnapshotTest {
         values.put("rootDeepSleepNetworkWhitelist", true);
         ConfigSnapshot custom = new ConfigSnapshot(values);
         assertFalse(custom.options.get("deepSleepGoogleWhitelist"));
-        assertFalse(custom.options.get("disableGoogleNetworkControl"));
+        assertFalse(custom.options.containsKey("disableGoogleNetworkControl"));
         assertFalse(custom.options.get("rootDeepSleepNetworkWhitelist"));
         values.put("deepSleepGoogleWhitelist", true);
         assertTrue(new ConfigSnapshot(values).options.get("rootDeepSleepNetworkWhitelist"));

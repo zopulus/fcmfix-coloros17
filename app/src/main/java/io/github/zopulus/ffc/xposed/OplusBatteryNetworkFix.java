@@ -25,28 +25,70 @@ import java.lang.reflect.Method;
 public class OplusBatteryNetworkFix extends XposedModule {
     private volatile Object googleController;
     private volatile Handler googleHandler;
-    private volatile Boolean lastNetworkEnabled;
+    private final java.util.concurrent.atomic.AtomicBoolean verificationQueued = new java.util.concurrent.atomic.AtomicBoolean();
+    private int verificationAttempts;
+    private static volatile String policyState = "pending", policyDetail = "Awaiting controller verification";
+    public static String networkPolicyState() { return policyState; }
+    public static String networkPolicyDetail() { return policyDetail; }
 
     @Override protected void onConfigLoaded(io.github.zopulus.ffc.util.ConfigSnapshot previous,
             io.github.zopulus.ffc.util.ConfigSnapshot current) {
-        if (current == null) return;
-        boolean enabled = current.options.getOrDefault("disableGoogleNetworkControl", true);
-        boolean changed = lastNetworkEnabled == null || lastNetworkEnabled != enabled;
-        lastNetworkEnabled = enabled;
-        if (enabled && changed) releaseExistingRestriction();
+        if (previous == null && current != null) releaseExistingRestriction();
     }
 
     private void releaseExistingRestriction() {
         Object controller = googleController;
         Handler handler = googleHandler;
-        if (controller == null || handler == null || !isConfigurationReady()) return;
-        handler.post(() -> {
-            if (!isConfigurationReady() || !getBooleanConfig("disableGoogleNetworkControl", true)) return;
+        if (controller == null || handler == null || !verificationQueued.compareAndSet(false, true)) return;
+        boolean posted = handler.post(() -> {
+            verificationAttempts++;
+            java.util.List<String> failures = new ArrayList<>();
+            int verified = 0;
             try {
+                Object manager = XposedHelpers.getObjectField(controller, "g");
+                Context batteryContext = (Context) XposedHelpers.getObjectField(controller, "d");
+                if (manager == null || batteryContext == null) throw new IllegalStateException("Controller not ready");
+                for (String name : GOOGLE_NETWORK_PACKAGES) {
+                    try {
+                        int uid = batteryContext.getPackageManager().getPackageUid(name, 0);
+                        Object policy = XposedHelpers.callMethod(manager, "getUidPolicy", uid);
+                        if (Integer.valueOf(POLICY_REJECT_ALL).equals(policy))
+                            XposedHelpers.callMethod(manager, "setUidPolicy", uid, POLICY_NONE);
+                    } catch (PackageManager.NameNotFoundException ignored) {
+                    } catch (Throwable error) { failures.add(name + ": " + error); }
+                }
                 XposedHelpers.callMethod(controller, "K", false, true, 0);
-                printLog("Google existing network policy release requested", true);
-            } catch (Throwable error) { printLog("Google policy reconciliation unavailable: " + error); }
+                // Verify the resulting OEM policy rather than treating a void write as success.
+                for (String name : GOOGLE_NETWORK_PACKAGES) {
+                    try {
+                        int uid = batteryContext.getPackageManager().getPackageUid(name, 0);
+                        Object actual = XposedHelpers.callMethod(manager, "getUidPolicy", uid);
+                        if (Integer.valueOf(POLICY_NONE).equals(actual)) verified++;
+                        else failures.add(name + ": policy=" + actual);
+                    } catch (PackageManager.NameNotFoundException ignored) {
+                    } catch (Throwable error) { failures.add(name + ": " + error); }
+                }
+                if (verified == 0) failures.add("No Google UID verified");
+                policyDetail = failures.isEmpty() ? "Verified " + verified + " Google UID policies"
+                        : String.join("; ", failures);
+                policyState = failures.isEmpty() ? "verified" : "failed";
+            } catch (Throwable error) {
+                policyDetail = error.toString();
+                policyState = "failed";
+            } finally {
+                printLog("Google OEM network verification: " + policyState + ": " + policyDetail, true);
+                reportHookStatus();
+                verificationQueued.set(false);
+                if ("failed".equals(policyState) && verificationAttempts < 3)
+                    handler.postDelayed(this::releaseExistingRestriction, verificationAttempts * 1000L);
+            }
         });
+        if (!posted) {
+            verificationQueued.set(false);
+            policyDetail = "Controller handler rejected verification";
+            policyState = "failed";
+            reportHookStatus();
+        }
     }
 
     private static volatile boolean deepSleepInstalled, policyInstalled, broadcastInstalled;
@@ -103,7 +145,7 @@ public class OplusBatteryNetworkFix extends XposedModule {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
                     Intent intent = (Intent) param.args[0];
-                    if (!isConfigurationReady() || !getBooleanConfig("disableGoogleNetworkControl", true) || intent == null || !GOOGLE_RESTRICT_CHANGE.equals(intent.getAction())
+                    if (intent == null || !GOOGLE_RESTRICT_CHANGE.equals(intent.getAction())
                             || !intent.getBooleanExtra(EXTRA_RESTRICT_ENABLE, false)) {
                         return;
                     }
@@ -140,7 +182,7 @@ public class OplusBatteryNetworkFix extends XposedModule {
                 protected void beforeHookedMethod(MethodHookParam param) {
                     int uid = (Integer) param.args[0];
                     int policy = (Integer) param.args[1];
-                    if (!isConfigurationReady() || !getBooleanConfig("disableGoogleNetworkControl", true) || policy != POLICY_REJECT_ALL || !isGoogleNetworkUid(uid)) {
+                    if (policy != POLICY_REJECT_ALL || !isGoogleNetworkUid(uid)) {
                         return;
                     }
 
@@ -254,7 +296,7 @@ public class OplusBatteryNetworkFix extends XposedModule {
                         try {
                             googleController = param.thisObject;
                             googleHandler = (Handler) XposedHelpers.getObjectField(param.thisObject, "e");
-                            if (isConfigurationReady() && getBooleanConfig("disableGoogleNetworkControl", true)) releaseExistingRestriction();
+                            releaseExistingRestriction();
                         } catch (Throwable error) { printLog("Google controller capture unavailable: " + error); }
                     }
                 });
