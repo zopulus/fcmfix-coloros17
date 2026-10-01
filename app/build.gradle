@@ -9,7 +9,7 @@ android {
         applicationId "io.github.zopulus.ffc"
         minSdkVersion 29
         targetSdkVersion 34
-        versionCode 82
+        versionCode 85
         versionName "20261001"
 
         ndk {

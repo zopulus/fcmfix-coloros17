@@ -65,7 +65,6 @@ import androidx.compose.material3.DropdownMenuPopup
 import androidx.compose.material3.DropdownMenuGroup
 import androidx.compose.material3.SelectableDropdownMenuItem
 import androidx.compose.material3.MenuDefaults
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TwoRowsTopAppBar
 import androidx.compose.material3.ListItemColors
 import androidx.compose.material3.ListItemDefaults
@@ -509,7 +508,7 @@ private fun AppListActions(
         }
         DropdownMenuPopup(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuGroup(
-                shapes = MenuDefaults.groupShapes(),
+                shapes = MenuDefaults.groupShape(index = 0, count = 2),
                 modifier = Modifier.width(200.dp)
             ) {
                 AppFilter.entries.forEachIndexed { index, filter ->
@@ -528,14 +527,18 @@ private fun AppListActions(
             }
             Spacer(Modifier.height(MenuDefaults.GroupSpacing))
             DropdownMenuGroup(
-                shapes = MenuDefaults.groupShapes(),
+                shapes = MenuDefaults.groupShape(index = 1, count = 2),
                 modifier = Modifier.width(200.dp)
             ) {
-                DropdownMenuItem(
-                    shape = MenuDefaults.standaloneItemShape,
+                SelectableDropdownMenuItem(
+                    shapes = MenuDefaults.itemShape(index = 0, count = 1),
+                    selected = fcmApps.isNotEmpty() && fcmApps.all { it.packageName in state.config.allowedPackages },
                     text = { Text("全选") },
                     enabled = !state.appsLoading && !state.appsLoadFailed && fcmApps.isNotEmpty(),
-                    leadingIcon = { Icon(Icons.Outlined.Done, contentDescription = null) },
+                    selectedLeadingIcon = {
+                        Icon(Icons.Filled.Check, contentDescription = null,
+                            modifier = Modifier.size(MenuDefaults.LeadingIconSize))
+                    },
                     onClick = {
                         haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
                         val detected = fcmApps.mapTo(mutableSetOf(), InstalledApp::packageName)
@@ -736,7 +739,7 @@ private fun SettingsScreen(
             icon = { Icon(Icons.Outlined.Warning, contentDescription = null) },
             title = { Text("开启 Root 联网白名单？") },
             text = {
-                Text("UID 0 可能包含所有以 Root 身份运行的进程。开启后，这些进程都会进入 ColorOS 深度睡眠联网白名单。")
+                Text("UID 0 可能包含所有以 Root 身份运行的进程。开启后，这些进程都会进入 ColorOS 睡眠待机优化白名单。")
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -782,7 +785,7 @@ private fun SettingsScreen(
                 items = listOf(
                     SettingEntry(
                         icon = ImageVector.vectorResource(R.drawable.ic_bedtime),
-                        title = "深度睡眠联网白名单",
+                        title = "睡眠待机优化白名单",
                         summary = "将 GMS 和 GSF 加入联网白名单",
                         checked = config.deepSleepGoogleWhitelist,
                         onCheckedChange = { enabled ->
@@ -795,7 +798,7 @@ private fun SettingsScreen(
                     SettingEntry(
                         icon = ImageVector.vectorResource(R.drawable.ic_terminal),
                         title = "待机优化白名单 UID 0",
-                        summary = if (config.deepSleepGoogleWhitelist) "将 Root 下所有进程加入联网白名单" else "请先开启深度睡眠联网白名单",
+                        summary = if (config.deepSleepGoogleWhitelist) "将 Root 下所有进程加入联网白名单" else "请先开启睡眠待机优化白名单",
                         checked = config.deepSleepGoogleWhitelist && config.rootDeepSleepNetworkWhitelist,
                         enabled = config.deepSleepGoogleWhitelist,
                         onCheckedChange = { enabled ->
@@ -805,8 +808,8 @@ private fun SettingsScreen(
                     ),
                     SettingEntry(
                         icon = ImageVector.vectorResource(R.drawable.ic_hourglass),
-                        title = "Doze 待机白名单",
-                        summary = "将 GMS 和 GSF 加入待机白名单",
+                        title = "Doze 待机优化白名单",
+                        summary = "将 GMS 和 GSF 加入待机优化白名单",
                         checked = config.dozeGoogleWhitelist,
                         onCheckedChange = { enabled ->
                             onConfigChange(config.copy(dozeGoogleWhitelist = enabled))
@@ -814,7 +817,7 @@ private fun SettingsScreen(
                     ),
                     SettingEntry(
                         icon = ImageVector.vectorResource(R.drawable.ic_wifi),
-                        title = "关闭 Google 网络限制",
+                        title = "解除 Google 网络限制",
                         summary = "解除 ColorOS 对 Google 服务的网络限制",
                         checked = config.disableGoogleNetworkControl,
                         onCheckedChange = { onConfigChange(config.copy(disableGoogleNetworkControl = it)) }
@@ -836,7 +839,7 @@ private fun SettingsScreen(
                     ),
                     SettingEntry(
                         icon = ImageVector.vectorResource(R.drawable.ic_ac_unit),
-                        title = "允许唤醒冰箱冻结的应用",
+                        title = "允许唤醒冻结的应用",
                         summary = "FCM 到达时尝试解除冻结状态",
                         checked = config.includeIceBoxDisabledApps,
                         onCheckedChange = { onConfigChange(config.copy(includeIceBoxDisabledApps = it)) }

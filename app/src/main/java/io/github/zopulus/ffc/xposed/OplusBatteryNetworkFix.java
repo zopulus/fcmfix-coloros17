@@ -197,7 +197,7 @@ public class OplusBatteryNetworkFix extends XposedModule {
                                 Context batteryContext = (Context) XposedHelpers.getObjectField(
                                         param.thisObject, "mContext");
                                 if (batteryContext == null) {
-                                    printLog("深度睡眠联网豁免未添加：Battery Context 不可用");
+                                    printLog("睡眠待机优化豁免未添加：Battery Context 不可用");
                                     return;
                                 }
 
@@ -215,17 +215,17 @@ public class OplusBatteryNetworkFix extends XposedModule {
 
                                 if (!added.isEmpty()) {
                                     param.setResult(whitelist);
-                                    printLog("深度睡眠联网豁免追加：" + added);
+                                    printLog("睡眠待机优化豁免追加：" + added);
                                 }
                             } catch (Throwable e) {
-                                printLog("深度睡眠联网豁免 Hook 失败：" + e.getMessage());
+                                printLog("睡眠待机优化豁免 Hook 失败：" + e.getMessage());
                             }
                         }
                     });
             deepSleepInstalled = true;
-            printLog("Battery 深度睡眠联网豁免 Hook 已安装");
+            printLog("Battery 睡眠待机优化豁免 Hook 已安装");
         } catch (Throwable e) {
-            printLog("Battery 深度睡眠联网豁免 Hook 安装失败：" + e.getMessage());
+            printLog("Battery 睡眠待机优化豁免 Hook 安装失败：" + e.getMessage());
         }
     }
 
