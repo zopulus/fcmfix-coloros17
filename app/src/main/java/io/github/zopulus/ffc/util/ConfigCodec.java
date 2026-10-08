@@ -12,7 +12,15 @@ public final class ConfigCodec {
     private ConfigCodec() {}
     public static ConfigSnapshot fromJson(JSONObject json) throws Exception {
         Map<String, Object> values = new HashMap<>();
-        if (json.has("revision")) values.put("revision", json.get("revision"));
+        if (json.has("revision")) {
+            Object revision = json.get("revision");
+            // JSON floating-point values can truncate or saturate when converted to long.
+            if (!(revision instanceof Integer || revision instanceof Long)
+                    || ((Number) revision).longValue() < 0) {
+                throw new IllegalArgumentException("Invalid revision");
+            }
+            values.put("revision", revision);
+        }
         Set<String> packages = new HashSet<>();
         JSONArray list = json.getJSONArray("allowList");
         for (int i = 0; i < list.length(); i++) {

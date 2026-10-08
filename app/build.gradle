@@ -42,6 +42,8 @@ android {
 
 dependencies {
     testImplementation 'junit:junit:4.13.2'
+    // Android-compatible org.json implementation for JVM tests; the SDK jar contains stubs.
+    testImplementation 'com.vaadin.external.google:android-json:0.0.20131108.vaadin1'
     compileOnly 'io.github.libxposed:api:102.0.0'
     implementation 'io.github.libxposed:interface:102.0.0'
     implementation 'io.github.libxposed:service:102.0.0'
