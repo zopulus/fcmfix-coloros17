@@ -204,16 +204,20 @@ public class BroadcastFix extends XposedModule {
                     if (!allowed || intent == null || !FcmTrust.matches(intent.getAction(), target)) return;
                     if (entry) {
                         printLog("FCM trusted sender: uid=" + callerUid + ", target=" + target, true);
-                        OplusProxyFix.beginFcmDeliveryWindow(target);
+                        int targetUid = OplusProxyFix.beginFcmDeliveryWindow(target);
+                        boolean activationAttempted = false;
                         if (getBooleanConfig("includeIceBoxDisableApp", false)
                                 && !IceboxUtils.isAppEnabled(context, target)) {
+                            activationAttempted = true;
                             // Activation uses the module's SDK permission and finishes before dispatch.
                             // Wait is bounded; no original Binder call is retained or replayed.
                             if (!IceboxUtils.activateBeforeDelivery(context, target)) {
                                 logOnce("Ice Box activation failed or timed out: " + target);
                             }
                         }
-                        OplusProxyFix.unfreeze(target);
+                        // Activation may wait; refresh attribution after that wait.
+                        if (activationAttempted) OplusProxyFix.unfreeze(target);
+                        else OplusProxyFix.unfreeze(target, targetUid);
                     }
                     intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
                     // Framework AppOps arguments are deliberately left untouched.

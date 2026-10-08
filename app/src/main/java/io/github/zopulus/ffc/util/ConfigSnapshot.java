@@ -27,10 +27,10 @@ public final class ConfigSnapshot {
         }
         allowList = Collections.unmodifiableSet(packages);
         Map<String, Boolean> flags = new HashMap<>();
-        for (String key : new String[]{"disableAutoCleanNotification", "includeIceBoxDisableApp", "deepSleepGoogleWhitelist", "dozeGoogleWhitelist", "rootDeepSleepNetworkWhitelist"}) {
+        for (String key : ConfigSchema.OPTIONS) {
             Object value = values.get(key);
             if (value != null && !(value instanceof Boolean)) throw new IllegalArgumentException("Invalid " + key);
-            boolean defaultValue = "deepSleepGoogleWhitelist".equals(key);
+            boolean defaultValue = ConfigSchema.defaultValue(key);
             if ("dozeGoogleWhitelist".equals(key)) defaultValue = flags.get("deepSleepGoogleWhitelist");
             flags.put(key, value == null ? defaultValue : Boolean.TRUE.equals(value));
         }

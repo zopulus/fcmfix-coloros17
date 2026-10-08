@@ -4,7 +4,7 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class HookHealthTest {
-    private static final String ALL = "OplusProxyWakeLock,OplusProxyBroadcast,setGmsRestricted,isGoogleRestricInfoOn,isAppClassifyRestricted,isAllowStartFromBindService,isAllowStartFromStartService,isSysRestrictionCpn,OAppNetControlService,HansSceneManager FCM window,HansCGroup FCM window,CpnProxy broadcast,isGmsRestricted,weak-signal net whitelist,validStartProcessFromBroadcast,malicious broadcast check,malicious service check,link-start broadcast check,Hans job FCM window";
+    private static final String ALL = "OplusProxyWakeLock,OplusProxyBroadcast,setGmsRestricted,isGoogleRestricInfoOn,isAppClassifyRestricted,isAllowStartFromBindService,isAllowStartFromStartService,isSysRestrictionCpn,OAppNetControlService,HansSceneManager FCM window,HansCGroup FCM window,CpnProxy broadcast,isGmsRestricted,weak-signal net whitelist,validStartProcessFromBroadcast,malicious broadcast check,malicious service check,link-start broadcast check,Hans job FCM window,night network whitelist,Google network firewall,Google restrict broadcast,deep-sleep GMS force-stop";
     @Test public void missingOneProtectionCannotPass() {
         assertEquals("", HookHealth.missing(ALL, true, true, true, true, true, true, true));
         for (String name : ALL.split(",")) {
@@ -23,6 +23,8 @@ public class HookHealthTest {
     }
     @Test public void installedHooksDoNotImplySuccessfulNetworkVerification() {
         assertTrue(HookHealth.isHealthy(true, true, "", "verified"));
+        assertTrue(HookHealth.isHealthy(true, true, "", "protected"));
+        assertFalse(HookHealth.isHealthy(true, true, "", "record_restricted"));
         assertFalse(HookHealth.isHealthy(true, true, "", "pending"));
         assertFalse(HookHealth.isHealthy(true, true, "", "failed"));
         assertFalse(HookHealth.isHealthy(true, true, "Hans job FCM window", "verified"));

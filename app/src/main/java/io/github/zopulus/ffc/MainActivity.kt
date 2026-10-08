@@ -1,5 +1,8 @@
 package io.github.zopulus.ffc
 
+import io.github.zopulus.ffc.util.ConfigSchema.*
+import io.github.zopulus.ffc.util.ConfigSnapshot
+import io.github.zopulus.ffc.util.ConfigCodec
 import io.github.zopulus.ffc.util.ConfigFile
 import io.github.zopulus.ffc.util.ConfigSaveQueue
 import android.content.ComponentName
@@ -42,18 +45,13 @@ import java.util.Locale
 
 private const val TAG = "fcmfix-ui"
 private const val ACTION_UPDATE_CONFIG = "io.github.zopulus.ffc.update.config"
-private const val KEY_DOZE_GOOGLE_WHITELIST = "dozeGoogleWhitelist"
-private const val KEY_DEEP_SLEEP_GOOGLE_WHITELIST = "deepSleepGoogleWhitelist"
-private const val KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST = "rootDeepSleepNetworkWhitelist"
-private const val KEY_DISABLE_AUTO_CLEAN_NOTIFICATION = "disableAutoCleanNotification"
-private const val KEY_INCLUDE_ICEBOX_DISABLED_APP = "includeIceBoxDisableApp"
 
 data class FcmfixConfig(
     val allowedPackages: Set<String> = emptySet(),
     val disableAutoCleanNotification: Boolean = false,
     val includeIceBoxDisabledApps: Boolean = false,
-    val deepSleepGoogleWhitelist: Boolean = true,
-    val dozeGoogleWhitelist: Boolean = true,
+    val deepSleepGoogleWhitelist: Boolean = defaultValue(KEY_DEEP_SLEEP_GOOGLE_WHITELIST),
+    val dozeGoogleWhitelist: Boolean = defaultValue(KEY_DOZE_GOOGLE_WHITELIST),
     val rootDeepSleepNetworkWhitelist: Boolean = false
 )
 
@@ -265,54 +263,26 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun configFromJson(json: JSONObject): FcmfixConfig {
-        val allowed = mutableSetOf<String>()
-        json.optJSONArray("allowList")?.let { array ->
-            for (index in 0 until array.length()) {
-                array.optString(index).takeIf(String::isNotBlank)?.let(allowed::add)
-            }
-        }
-        return FcmfixConfig(
-            allowedPackages = allowed,
-            disableAutoCleanNotification = json.optBoolean(KEY_DISABLE_AUTO_CLEAN_NOTIFICATION, false),
-            includeIceBoxDisabledApps = json.optBoolean(KEY_INCLUDE_ICEBOX_DISABLED_APP, false),
-            deepSleepGoogleWhitelist = json.optBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, true),
-            dozeGoogleWhitelist = json.optBoolean(KEY_DOZE_GOOGLE_WHITELIST, json.optBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, true)),
-            rootDeepSleepNetworkWhitelist = json.optBoolean(KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST, false)
-        )
-    }
-
-    private fun configFromPreferences(preferences: SharedPreferences) = FcmfixConfig(
-        allowedPackages = preferences.getStringSet("allowList", emptySet()).orEmpty().toSet(),
-        disableAutoCleanNotification = preferences.getBoolean(KEY_DISABLE_AUTO_CLEAN_NOTIFICATION, false),
-        includeIceBoxDisabledApps = preferences.getBoolean(KEY_INCLUDE_ICEBOX_DISABLED_APP, false),
-        deepSleepGoogleWhitelist = preferences.getBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, true),
-            dozeGoogleWhitelist = preferences.getBoolean(KEY_DOZE_GOOGLE_WHITELIST, preferences.getBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, true)),
-        rootDeepSleepNetworkWhitelist = preferences.getBoolean(KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST, false)
+    private fun configFromSnapshot(snapshot: ConfigSnapshot) = FcmfixConfig(
+        allowedPackages = snapshot.allowList.toSet(),
+        disableAutoCleanNotification = snapshot.options.getValue(KEY_DISABLE_AUTO_CLEAN_NOTIFICATION),
+        includeIceBoxDisabledApps = snapshot.options.getValue(KEY_INCLUDE_ICEBOX_DISABLED_APP),
+        deepSleepGoogleWhitelist = snapshot.options.getValue(KEY_DEEP_SLEEP_GOOGLE_WHITELIST),
+        dozeGoogleWhitelist = snapshot.options.getValue(KEY_DOZE_GOOGLE_WHITELIST),
+        rootDeepSleepNetworkWhitelist = snapshot.options.getValue(KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST)
     )
+
+    private fun configFromJson(json: JSONObject) = configFromSnapshot(ConfigCodec.fromJson(json))
+
+    private fun configFromPreferences(preferences: SharedPreferences) =
+        configFromSnapshot(ConfigSnapshot(preferences.all))
 
     private fun loadConfigFromLocalFile() {
         try {
             val json = ConfigFile.read(this)
+            val config = configFromJson(json)
             latestRevision = json.optLong("revision", 0)
-            val allowed = mutableSetOf<String>()
-            json.optJSONArray("allowList")?.let { array ->
-                for (index in 0 until array.length()) {
-                    array.optString(index).takeIf(String::isNotBlank)?.let(allowed::add)
-                }
-            }
-            uiState.value = uiState.value.copy(
-                config = FcmfixConfig(
-                    allowedPackages = allowed,
-                    disableAutoCleanNotification = json.optBoolean(KEY_DISABLE_AUTO_CLEAN_NOTIFICATION, false),
-                    includeIceBoxDisabledApps = json.optBoolean(KEY_INCLUDE_ICEBOX_DISABLED_APP, false),
-                    deepSleepGoogleWhitelist = json.optBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, true),
-            dozeGoogleWhitelist = json.optBoolean(KEY_DOZE_GOOGLE_WHITELIST, json.optBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, true)),
-                    rootDeepSleepNetworkWhitelist = json.optBoolean(KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST, false)
-                ),
-                configSource = ConfigSource.LOCAL
-            )
-            uiState.value = uiState.value.copy(config = uiState.value.config.normalized())
+            uiState.value = uiState.value.copy(config = config, configSource = ConfigSource.LOCAL)
         } catch (error: Throwable) {
             uiState.value = uiState.value.copy(configSource = ConfigSource.DEFAULT)
             Log.i(TAG, "Using default configuration", error)
@@ -399,13 +369,14 @@ class MainActivity : ComponentActivity() {
         val collator = Collator.getInstance(Locale.getDefault())
         return packageManager.getInstalledPackages(flags).mapNotNull { packageInfo: PackageInfo ->
             val receivers = packageInfo.receivers ?: return@mapNotNull null
+            if (!receivers.any(::isFcmReceiver)) return@mapNotNull null
             val applicationInfo = packageInfo.applicationInfo ?: return@mapNotNull null
             try {
                 InstalledApp(
                     packageName = packageInfo.packageName,
                     label = applicationInfo.loadLabel(packageManager).toString(),
                     icon = drawableToBitmap(applicationInfo.loadIcon(packageManager)),
-                    hasFcmReceiver = receivers.any(::isFcmReceiver)
+                    hasFcmReceiver = true
                 )
             } catch (error: Throwable) {
                 Log.w(TAG, "Skipping ${packageInfo.packageName}", error)

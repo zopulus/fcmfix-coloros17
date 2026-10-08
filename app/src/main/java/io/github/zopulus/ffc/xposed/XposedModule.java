@@ -3,6 +3,7 @@ package io.github.zopulus.ffc.xposed;
 import android.annotation.SuppressLint;
 import java.lang.reflect.Method;
 import io.github.zopulus.ffc.util.ConfigSnapshot;
+import io.github.zopulus.ffc.util.ConfigSchema;
 import io.github.zopulus.ffc.util.DiagnosticLogger;
 import android.os.SystemClock;
 import io.github.zopulus.ffc.util.FcmTrust;
@@ -279,8 +280,27 @@ public abstract class XposedModule {
         if (!loaded && failure != null) throw failure;
     }
 
-    protected static void reportHookStatus() {
-        if (context == null) return;
+    private static final java.util.concurrent.ScheduledExecutorService STATUS_REPORTER =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread thread = new Thread(r, "FCMFix-status");
+                thread.setDaemon(true);
+                return thread;
+            });
+    protected static io.github.zopulus.ffc.util.RetryingTask retryingTask(
+            java.util.function.BooleanSupplier task, long... delays) {
+        return new io.github.zopulus.ffc.util.RetryingTask((action, delay) -> {
+            java.util.concurrent.ScheduledFuture<?> future = STATUS_REPORTER.schedule(
+                    action, delay, java.util.concurrent.TimeUnit.MILLISECONDS);
+            return () -> future.cancel(false);
+        }, task, delays);
+    }
+    private static final io.github.zopulus.ffc.util.RetryingTask STATUS_REPORT =
+            retryingTask(XposedModule::tryReportHookStatus, 1000, 3000, 10000, 30000);
+
+    protected static void reportHookStatus() { STATUS_REPORT.request(); }
+
+    private static boolean tryReportHookStatus() {
+        if (context == null) return false;
         long identity = android.os.Binder.clearCallingIdentity();
         try {
             Bundle status = new Bundle();
@@ -289,16 +309,23 @@ public abstract class XposedModule {
             status.putBoolean("doze", OplusDeviceIdleFix.hasDozeHook());
             status.putBoolean("alarm", OplusDeviceIdleFix.hasAlarmHook());
             status.putBoolean("deepSleepAlarm", OplusDeviceIdleFix.hasDeepSleepAlarmHook());
-            status.putString("oplusProtections", OplusProxyFix.installedProtections());
-            if ("android".equals(getSelfPackageName())) status.putBoolean("active", BroadcastFix.isInstalled());
+            status.putString("oplusProtections", HookRegistry.installedNames());
+            if ("android".equals(getSelfPackageName())) {
+                status.putBoolean("active", BroadcastFix.isInstalled());
+                status.putBoolean("networkFirewallGuarded", OplusGoogleNetworkFix.hasNetworkFirewallGuard());
+                status.putBoolean("nightWhitelist", OplusGoogleNetworkFix.hasNightWhitelistHook());
+            }
             else {
                 status.putBoolean("deepSleep", OplusBatteryNetworkFix.hasDeepSleepHook());
                 status.putBoolean("network", OplusBatteryNetworkFix.hasNetworkHooks());
                 status.putString("networkPolicyState", OplusBatteryNetworkFix.networkPolicyState());
                 status.putString("networkPolicyDetail", OplusBatteryNetworkFix.networkPolicyDetail());
             }
-            context.getContentResolver().call(Uri.parse("content://" + SELF_PACKAGE_NAME + ".provider"), "recordHookStatus", null, status);
-        } catch (Throwable error) { logOnce("Cannot report hook status: " + error); }
+            Bundle acknowledgement = context.getContentResolver().call(
+                    Uri.parse("content://" + SELF_PACKAGE_NAME + ".provider"), "recordHookStatus", null, status);
+            if (acknowledgement == null) throw new IllegalStateException("Hook status provider did not acknowledge");
+            return true;
+        } catch (Throwable error) { logOnce("Cannot report hook status; retry scheduled: " + error); return false; }
         finally { android.os.Binder.restoreCallingIdentity(identity); }
     }
 
@@ -330,44 +357,20 @@ public abstract class XposedModule {
             Set<String> allowListTmp = new HashSet<>();
             boolean init = false;
             long revision = 0;
-            boolean disableAutoCleanNotification = false;
-            boolean includeIceBoxDisableApp = false;
-            boolean deepSleepGoogleWhitelist = true;
-            Boolean dozeGoogleWhitelist = null;
-            boolean rootDeepSleepNetworkWhitelist = false;
+            HashMap<String, Object> values = new HashMap<>();
             cursor.moveToFirst();
             do {
                 String key = cursor.getString(cursor.getColumnIndex("key"));
                 String value = cursor.getString(cursor.getColumnIndex("value"));
-                if ("allowList".equals(key)) {
-                    allowListTmp.add(value);
-                } else if ("revision".equals(key)) {
-                    revision = Long.parseLong(value);
-                } else if ("init".equals(key)) {
-                    init = "1".equals(value);
-                } else if ("disableAutoCleanNotification".equals(key)) {
-                    disableAutoCleanNotification = "1".equals(value);
-                } else if ("includeIceBoxDisableApp".equals(key)) {
-                    includeIceBoxDisableApp = "1".equals(value);
-                } else if ("deepSleepGoogleWhitelist".equals(key)) {
-                    deepSleepGoogleWhitelist = "1".equals(value);
-                } else if ("dozeGoogleWhitelist".equals(key)) {
-                    dozeGoogleWhitelist = "1".equals(value);
-                } else if ("rootDeepSleepNetworkWhitelist".equals(key)) {
-                    rootDeepSleepNetworkWhitelist = "1".equals(value);
-                }
+                if ("allowList".equals(key)) allowListTmp.add(value);
+                else if ("revision".equals(key)) revision = Long.parseLong(value);
+                else if ("init".equals(key)) init = "1".equals(value);
+                else if (ConfigSchema.OPTIONS.contains(key))
+                    values.put(key, "1".equals(value));
             } while (cursor.moveToNext());
-            if (!init) {
-                throw new IllegalStateException("provider 未初始化");
-            }
-            HashMap<String, Object> values = new HashMap<>();
+            if (!init) throw new IllegalStateException("provider 未初始化");
             values.put("allowList", allowListTmp);
             values.put("revision", revision);
-            values.put("disableAutoCleanNotification", disableAutoCleanNotification);
-            values.put("includeIceBoxDisableApp", includeIceBoxDisableApp);
-            values.put("deepSleepGoogleWhitelist", deepSleepGoogleWhitelist);
-            values.put("dozeGoogleWhitelist", dozeGoogleWhitelist == null ? deepSleepGoogleWhitelist : dozeGoogleWhitelist);
-            values.put("rootDeepSleepNetworkWhitelist", rootDeepSleepNetworkWhitelist);
             ConfigSnapshot snapshot = new ConfigSnapshot(values);
             if (config == null || snapshot.revision >= config.revision) config = snapshot;
             if ("android".equals(getSelfPackageName())) {
@@ -438,18 +441,27 @@ public abstract class XposedModule {
     }
 
     protected static boolean isGmsUid(int uid) {
-        if (context == null || uid < 10000) return false;
-        // Existing unfreeze/UID resolution uses this process's user. Do not apply its
-        // window to the personal-profile copy of a work-profile broadcast target.
-        if (!android.os.UserHandle.getUserHandleForUid(uid).equals(android.os.Process.myUserHandle())) return false;
+        if (!isCurrentUserAppUid(uid) || context == null) return false;
         try {
-            String[] packages = context.getPackageManager().getPackagesForUid(uid);
-            return io.github.zopulus.ffc.util.FcmTrust.isGmsSender(uid, packages);
-        } catch (RuntimeException e) {
-            printLog("Cannot verify GMS UID: " + e.getMessage());
+            return isGmsUid(uid, context.getPackageManager().getPackagesForUid(uid));
+        } catch (RuntimeException error) {
+            printLog("Cannot verify GMS UID: " + error.getMessage());
+            return false;
         }
-        return false;
     }
+
+    private static boolean isCurrentUserAppUid(int uid) {
+        // Never attribute a work-profile sender to the personal-profile target.
+        return uid >= 10000 && android.os.UserHandle.getUserHandleForUid(uid)
+                .equals(android.os.Process.myUserHandle());
+    }
+
+    private static boolean isGmsUid(int uid, String[] packages) {
+        return isCurrentUserAppUid(uid) && FcmTrust.isGmsSender(uid, packages);
+    }
+
+    private static final java.util.concurrent.ConcurrentHashMap<Method, Integer> ATTRIBUTION_INDICES =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     protected static String explicitTarget(Intent intent) {
         if (intent == null) return null;
@@ -458,9 +470,12 @@ public abstract class XposedModule {
     }
 
     protected static int attributionIndex(Method method) {
-        String[] types = java.util.Arrays.stream(method.getParameterTypes()).map(Class::getName).toArray(String[]::new);
-        return OplusAttribution.callerIndex(method.getDeclaringClass().getName(),
-                method.getName(), method.getReturnType().getName(), types);
+        return ATTRIBUTION_INDICES.computeIfAbsent(method, candidate -> {
+            String[] types = java.util.Arrays.stream(candidate.getParameterTypes())
+                    .map(Class::getName).toArray(String[]::new);
+            return OplusAttribution.callerIndex(candidate.getDeclaringClass().getName(),
+                    candidate.getName(), candidate.getReturnType().getName(), types);
+        });
     }
 
     protected boolean trustedDelivery(Intent intent, String target, XC_MethodHook.MethodHookParam param) {
@@ -490,9 +505,10 @@ public abstract class XposedModule {
                         if (!(info instanceof android.content.pm.ApplicationInfo)
                                 || !target.equals(((android.content.pm.ApplicationInfo) info).packageName)) return false;
                     }
-                    boolean gms = isGmsUid(callerUid);
+                    // Reuse one fresh package query only within this validation.
                     String[] packages = context.getPackageManager().getPackagesForUid(callerUid);
-                    boolean selfInWindow = packages != null && java.util.Arrays.asList(packages).contains(target)
+                    boolean gms = isGmsUid(callerUid, packages);
+                    boolean selfInWindow = !gms && packages != null && java.util.Arrays.asList(packages).contains(target)
                             && OplusProxyFix.isInFcmDeliveryWindow(callerUid);
                     boolean gcmBind = "isAllowStartFromBindService".equals(methodName)
                             && "bsgcm".equals(param.args[5]);

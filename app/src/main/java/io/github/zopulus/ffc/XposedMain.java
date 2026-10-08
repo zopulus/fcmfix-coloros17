@@ -8,6 +8,7 @@ import io.github.zopulus.ffc.xposed.AutoStartFix;
 import io.github.zopulus.ffc.xposed.BroadcastFix;
 import io.github.zopulus.ffc.xposed.KeepNotification;
 import io.github.zopulus.ffc.xposed.OplusProxyFix;
+import io.github.zopulus.ffc.xposed.OplusGoogleNetworkFix;
 import io.github.zopulus.ffc.xposed.OplusDeviceIdleFix;
 import io.github.zopulus.ffc.xposed.OplusBatteryNetworkFix;
 import io.github.zopulus.ffc.xposed.XposedModule;
@@ -27,6 +28,7 @@ public class XposedMain extends io.github.libxposed.api.XposedModule {
         safeInit(() -> new AutoStartFix(classLoader), "AutoStartFix");
         safeInit(() -> new KeepNotification(classLoader), "KeepNotification");
         safeInit(() -> new OplusProxyFix(classLoader), "OplusProxyFix");
+        safeInit(() -> new OplusGoogleNetworkFix(classLoader), "OplusGoogleNetworkFix");
         safeInit(() -> new OplusDeviceIdleFix(classLoader), "OplusDeviceIdleFix");
         // system_server 中 attachBaseContext 的 hook 安装过晚，主动获取系统上下文
         initSystemServerContext(classLoader);

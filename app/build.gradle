@@ -9,8 +9,8 @@ android {
         applicationId "io.github.zopulus.ffc"
         minSdkVersion 29
         targetSdkVersion 34
-        versionCode 88
-        versionName "20261001"
+        versionCode 92
+        versionName "2026100801"
 
         ndk {
             abiFilters "arm64-v8a"

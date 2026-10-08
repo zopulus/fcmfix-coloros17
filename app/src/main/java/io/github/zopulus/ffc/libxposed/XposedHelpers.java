@@ -7,10 +7,32 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class XposedHelpers {
 
     private XposedHelpers() {
+    }
+
+    // Actual Class keys preserve class-loader isolation and field shadowing.
+    private static final ClassValue<MemberCache> MEMBERS = new ClassValue<>() {
+        @Override protected MemberCache computeValue(Class<?> type) { return new MemberCache(); }
+    };
+    private static final class MemberCache {
+        final ConcurrentHashMap<String, Field> fields = new ConcurrentHashMap<>();
+        final ConcurrentHashMap<MethodKey, Method> methods = new ConcurrentHashMap<>();
+    }
+    private record MethodKey(String name, List<Class<?>> types, boolean exact) { }
+    private static final int MAX_METHOD_CACHE = 256;
+
+    private static Method cacheMethod(MemberCache cache, MethodKey key, Method method) {
+        method.setAccessible(true);
+        // Reflection on arbitrary arguments must not grow an unbounded type catalogue.
+        if (cache.methods.size() < MAX_METHOD_CACHE) {
+            Method previous = cache.methods.putIfAbsent(key, method);
+            if (previous != null) return previous;
+        }
+        return method;
     }
 
     public static class ClassNotFoundError extends Error {
@@ -36,10 +58,12 @@ public final class XposedHelpers {
     }
 
     public static Method findMethodExact(Class<?> clazz, String methodName, Class<?>... parameterTypes) {
+        MemberCache cache = MEMBERS.get(clazz);
+        MethodKey key = new MethodKey(methodName, List.copyOf(Arrays.asList(parameterTypes)), true);
+        Method cached = cache.methods.get(key);
+        if (cached != null) return cached;
         try {
-            Method method = clazz.getDeclaredMethod(methodName, parameterTypes);
-            method.setAccessible(true);
-            return method;
+            return cacheMethod(cache, key, clazz.getDeclaredMethod(methodName, parameterTypes));
         } catch (NoSuchMethodException e) {
             throw new NoSuchMethodError(clazz.getName() + "#" + methodName);
         }
@@ -167,12 +191,16 @@ public final class XposedHelpers {
     }
 
     private static Field findField(Class<?> clazz, String fieldName) {
+        MemberCache cache = MEMBERS.get(clazz);
+        Field cached = cache.fields.get(fieldName);
+        if (cached != null) return cached;
         Class<?> current = clazz;
         while (current != null) {
             try {
                 Field field = current.getDeclaredField(fieldName);
                 field.setAccessible(true);
-                return field;
+                Field previous = cache.fields.putIfAbsent(fieldName, field);
+                return previous == null ? field : previous;
             } catch (NoSuchFieldException ignored) {
                 current = current.getSuperclass();
             }
@@ -181,6 +209,13 @@ public final class XposedHelpers {
     }
 
     private static Method findBestMethod(Class<?> clazz, String methodName, Object[] args) {
+        MemberCache cache = MEMBERS.get(clazz);
+        Class<?>[] types = new Class<?>[args.length];
+        for (int i = 0; i < args.length; i++) types[i] = args[i] == null ? null : args[i].getClass();
+        // Arrays.asList permits the null marker, unlike List.copyOf.
+        MethodKey key = new MethodKey(methodName, Arrays.asList(types), false);
+        Method cached = cache.methods.get(key);
+        if (cached != null) return cached;
         Method best = null;
         int bestScore = -1;
         for (Method m : clazz.getDeclaredMethods()) {
@@ -215,8 +250,7 @@ public final class XposedHelpers {
         if (best == null) {
             throw new NoSuchMethodError(clazz.getName() + "#" + methodName);
         }
-        best.setAccessible(true);
-        return best;
+        return cacheMethod(cache, key, best);
     }
 
     private static Class<?> boxPrimitive(Class<?> cls) {

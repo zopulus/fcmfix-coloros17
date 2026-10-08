@@ -12,6 +12,7 @@ import io.github.zopulus.ffc.libxposed.XposedBridge;
 import io.github.zopulus.ffc.libxposed.XposedHelpers;
 
 import io.github.zopulus.ffc.util.FcmTrust;
+import io.github.zopulus.ffc.util.ProtectionId;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -75,25 +76,25 @@ public class OplusProxyFix extends XposedModule {
 
     public OplusProxyFix(ClassLoader classLoader) {
         super(classLoader);
-        runHook("OplusProxyWakeLock", this::startHookOplusProxyWakeLock);
-        runHook("OplusProxyBroadcast", this::startHookOplusProxyBroadcast);
-        runHook("setGmsRestricted", this::startHookSetGmsRestricted);
-        runHook("isGoogleRestricInfoOn", this::startHookIsGoogleRestricInfoOn);
-        runHook("isAppClassifyRestricted", this::startHookAppClassifyRestricted);
-        runHook("isAllowStartFromBindService", this::startHookGcmBindService);
-        runHook("isAllowStartFromStartService", this::startHookFcmStartService);
-        runHook("isSysRestrictionCpn", this::startHookHansGmsRestriction);
-        runHook("OAppNetControlService", this::startHookOAppNetControlService);
-        runHook("HansSceneManager FCM window", this::startHookHansFcmWindow);
-        runHook("HansCGroup FCM window", this::startHookHansCGroupFcmWindow);
-        runHook("CpnProxy broadcast", this::startHookCpnProxyBroadcast);
-        runHook("isGmsRestricted", this::startHookIsGmsRestricted);
-        runHook("weak-signal net whitelist", this::startHookWeakSignalNetWhiteList);
-        runHook("validStartProcessFromBroadcast", this::startHookValidStartFromBroadcast);
-        runHook("malicious broadcast check", this::startHookMaliciousBroadcast);
-        runHook("malicious service check", this::startHookMaliciousService);
-        runHook("link-start broadcast check", this::startHookLinkStartBroadcast);
-        runHook("Hans job FCM window", this::startHookHansJobWindow);
+        HookRegistry.install(ProtectionId.PROXY_WAKELOCK, this::startHookOplusProxyWakeLock);
+        HookRegistry.install(ProtectionId.PROXY_BROADCAST, this::startHookOplusProxyBroadcast);
+        HookRegistry.install(ProtectionId.GMS_RESTRICTION_SETTER, this::startHookSetGmsRestricted);
+        HookRegistry.install(ProtectionId.GOOGLE_RESTRICTION_INFO, this::startHookIsGoogleRestricInfoOn);
+        HookRegistry.install(ProtectionId.APP_CLASSIFICATION, this::startHookAppClassifyRestricted);
+        HookRegistry.install(ProtectionId.GCM_BIND, this::startHookGcmBindService);
+        HookRegistry.install(ProtectionId.FCM_SERVICE_START, this::startHookFcmStartService);
+        HookRegistry.install(ProtectionId.SYSTEM_COMPONENT_RESTRICTION, this::startHookHansGmsRestriction);
+        HookRegistry.install(ProtectionId.APP_NETWORK_CONTROL, this::startHookOAppNetControlService);
+        HookRegistry.install(ProtectionId.HANS_SCENE_WINDOW, this::startHookHansFcmWindow);
+        HookRegistry.install(ProtectionId.HANS_CGROUP_WINDOW, this::startHookHansCGroupFcmWindow);
+        HookRegistry.install(ProtectionId.CPN_PROXY, this::startHookCpnProxyBroadcast);
+        HookRegistry.install(ProtectionId.GMS_RESTRICTION_STATE, this::startHookIsGmsRestricted);
+        HookRegistry.install(ProtectionId.WEAK_SIGNAL_WHITELIST, this::startHookWeakSignalNetWhiteList);
+        HookRegistry.install(ProtectionId.BROADCAST_PROCESS_START, this::startHookValidStartFromBroadcast);
+        HookRegistry.install(ProtectionId.MALICIOUS_BROADCAST, this::startHookMaliciousBroadcast);
+        HookRegistry.install(ProtectionId.MALICIOUS_SERVICE, this::startHookMaliciousService);
+        HookRegistry.install(ProtectionId.LINK_START_BROADCAST, this::startHookLinkStartBroadcast);
+        HookRegistry.install(ProtectionId.HANS_JOB_WINDOW, this::startHookHansJobWindow);
     }
 
     /**
@@ -123,9 +124,8 @@ public class OplusProxyFix extends XposedModule {
                     if (isConfigurationReady() && FcmTrust.allowsJob(target, requested, jobPackage,
                             targetIsAllow(target), isInFcmDeliveryWindow(uid))
                             && getTargetUidFromPackageName(target) == uid) {
-                        unfreeze(target);
-                        printLog("Oplus FCM job-restriction bypass: pkg="
-                                + getFcmDeliveryPackage(uid) + ", uid=" + uid, true);
+                        unfreeze(target, uid);
+                        printLog("Oplus FCM job-restriction bypass: pkg=" + target + ", uid=" + uid, true);
                         param.setResult(false);
                     }
                 }
@@ -341,27 +341,6 @@ public class OplusProxyFix extends XposedModule {
         printLog("Oplus GMS restriction setter hook active");
     }
 
-    private static final java.util.Set<String> installedProtections =
-            java.util.concurrent.ConcurrentHashMap.newKeySet();
-    public static String installedProtections() {
-        java.util.List<String> names = new java.util.ArrayList<>(installedProtections);
-        java.util.Collections.sort(names);
-        return String.join(",", names);
-    }
-
-    private interface HookAction {
-        void run() throws Throwable;
-    }
-
-    private void runHook(String name, HookAction action) {
-        try {
-            action.run();
-            installedProtections.add(name);
-        } catch (Throwable e) {
-            printLog("hook error " + name + ": " + e.getClass().getSimpleName() + ": " + e.getMessage());
-        }
-    }
-
     private void startHookOplusProxyBroadcast() {
         int hookCount = 0;
         for (String className : PROXY_BROADCAST_CLASSES) {
@@ -515,6 +494,12 @@ public class OplusProxyFix extends XposedModule {
     }
 
     public static void unfreeze(String target) {
+        if (sUnfreezeMethod == null) return;
+        unfreeze(target, getTargetUidFromPackageName(target));
+    }
+
+    /** UID was freshly resolved by this delivery; callers must not reuse it across events. */
+    public static void unfreeze(String target, int uid) {
         Method method = sUnfreezeMethod;
         if (method == null) {
             return;
@@ -524,10 +509,7 @@ public class OplusProxyFix extends XposedModule {
             return;
         }
 
-        int uid = getTargetUidFromPackageName(target);
-        if (uid < 0) {
-            return;
-        }
+        if (uid < 0) return;
 
         Object[] args = createUnfreezeArguments(method.getParameterTypes(), uid);
         if (args == null) {
@@ -548,13 +530,14 @@ public class OplusProxyFix extends XposedModule {
         }
     }
 
-    public static void beginFcmDeliveryWindow(String target) {
+    public static int beginFcmDeliveryWindow(String target) {
         int uid = getTargetUidFromPackageName(target);
-        if (uid < 0) return;
+        if (uid < 0) return -1;
 
         sFcmDeliveryWindows.begin(uid, target, SystemClock.elapsedRealtime());
         printLog("Oplus FCM delivery window: pkg=" + target + ", uid=" + uid
                 + ", duration=" + FCM_DELIVERY_WINDOW_MS + "ms", true);
+        return uid;
     }
 
     static boolean isInFcmDeliveryWindow(int uid) {
