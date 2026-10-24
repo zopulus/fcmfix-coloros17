@@ -48,6 +48,9 @@ public class ConfigProvider extends ContentProvider {
         return data;
     }
     @Override public Bundle call(String method, String arg, Bundle extras) {
+        if ("newAppInstalled".equals(method)) {
+            return io.github.zopulus.ffc.util.NewAppInstallStore.handle(getContext(), arg, extras);
+        }
         requireReader();
         SharedPreferences status = getContext().getSharedPreferences("hook_status", Context.MODE_PRIVATE);
         int boot = Settings.Global.getInt(getContext().getContentResolver(), "boot_count", -1);

@@ -27,6 +27,7 @@ public class XposedMain extends io.github.libxposed.api.XposedModule {
         safeInit(() -> new BroadcastFix(classLoader), "BroadcastFix");
         safeInit(() -> new AutoStartFix(classLoader), "AutoStartFix");
         safeInit(() -> new KeepNotification(classLoader), "KeepNotification");
+        safeInit(() -> new io.github.zopulus.ffc.xposed.NewAppInstallReceiver(classLoader), "NewAppInstallReceiver");
         safeInit(() -> new OplusProxyFix(classLoader), "OplusProxyFix");
         safeInit(() -> new OplusGoogleNetworkFix(classLoader), "OplusGoogleNetworkFix");
         safeInit(() -> new OplusDeviceIdleFix(classLoader), "OplusDeviceIdleFix");

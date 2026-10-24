@@ -47,7 +47,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.outlined.Done
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Info
@@ -66,6 +66,7 @@ import androidx.compose.material3.DropdownMenuGroup
 import androidx.compose.material3.SelectableDropdownMenuItem
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.TwoRowsTopAppBar
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemColors
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
@@ -112,11 +113,6 @@ private enum class MainTab(val label: String, val appBarTitle: String = label) {
     SETTINGS("设置")
 }
 
-private enum class AppFilter(val title: String) {
-    ALL("全部 FCM"),
-    ALLOWED("已允许")
-}
-
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun FcmfixApp(
@@ -134,6 +130,11 @@ fun FcmfixApp(
     val coroutineScope = rememberCoroutineScope()
     val selectedTab = MainTab.entries[pagerState.currentPage]
     var appFilter by rememberSaveable { mutableStateOf(AppFilter.ALL) }
+    val appListSession = remember(pagerState.settledPage) { AppListSession() }
+    val onAppConfigChange: (FcmfixConfig) -> Unit = {
+        appListSession.onUserEdit()
+        onConfigChange(it)
+    }
     val haptics = LocalHapticFeedback.current
 
     Scaffold(
@@ -239,7 +240,7 @@ fun FcmfixApp(
                                 apps = apps,
                                 selectedFilter = appFilter,
                                 onFilterChange = { appFilter = it },
-                                onConfigChange = onConfigChange
+                                onConfigChange = onAppConfigChange
                             )
                         }
                     }
@@ -258,10 +259,11 @@ fun FcmfixApp(
                 )
                 MainTab.APPS -> AppsScreen(
                     modifier = pageModifier,
+                    session = appListSession,
                     selectedFilter = appFilter,
                     state = state,
                     apps = apps,
-                    onConfigChange = onConfigChange,
+                    onConfigChange = onAppConfigChange,
                     onReloadApps = onReloadApps
                 )
                 MainTab.SETTINGS -> SettingsScreen(
@@ -299,7 +301,7 @@ private fun HomeScreen(
     Column(
         modifier = modifier
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         HomeStatusCard(connected = state.xposedConnected, versionName = versionName)
@@ -361,40 +363,46 @@ private fun HomeStatusCard(connected: Boolean, versionName: String) {
         contentColor = contentColor,
         shape = MaterialTheme.shapes.large
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 18.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = if (connected) Icons.Outlined.CheckCircle else Icons.Outlined.Warning,
-                contentDescription = null,
-                modifier = Modifier.size(30.dp)
-            )
-            Spacer(Modifier.width(16.dp))
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        ListItem(
+            leadingContent = {
+                Icon(
+                    imageVector = if (connected) Icons.Rounded.CheckCircle else Icons.Outlined.Warning,
+                    contentDescription = null
+                )
+            },
+            trailingContent = {
+                Surface(
+                    modifier = Modifier.padding(end = 4.dp),
+                    shape = RoundedCornerShape(4.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                ) {
+                    Text(
+                        "API 102",
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+                        style = MaterialTheme.typography.labelSmallEmphasized
+                    )
+                }
+            },
+            supportingContent = {
+                Text("版本 $versionName", style = MaterialTheme.typography.bodyMedium)
+            },
+            verticalAlignment = Alignment.CenterVertically,
+            colors = ListItemDefaults.colors(
+                containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                contentColor = contentColor,
+                leadingContentColor = contentColor,
+                trailingContentColor = contentColor,
+                supportingContentColor = contentColor.copy(alpha = 0.7f)
+            ),
+            elevation = ListItemDefaults.elevation(),
+            content = {
                 Text(
                     if (connected) "已激活" else "未激活",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    "版本 $versionName",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = contentColor.copy(alpha = 0.78f)
+                    style = MaterialTheme.typography.titleMediumEmphasized
                 )
             }
-            Spacer(Modifier.width(12.dp))
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.primary
-            ) {
-                Text(
-                    "API 102",
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onPrimary
-                )
-            }
-        }
+        )
     }
 }
 
@@ -553,6 +561,7 @@ private fun AppListActions(
 @Composable
 private fun AppsScreen(
     modifier: Modifier,
+    session: AppListSession,
     selectedFilter: AppFilter,
     state: FcmfixUiState,
     apps: List<InstalledApp>,
@@ -563,22 +572,19 @@ private fun AppsScreen(
     val allowed = state.config.allowedPackages
     val fcmApps = remember(apps) { apps.filter(InstalledApp::hasFcmReceiver) }
     val allowedFcmCount = fcmApps.count { it.packageName in allowed }
-    val visibleApps = remember(fcmApps, query, selectedFilter, allowed) {
-        fcmApps.asSequence()
-            .filter { app ->
-                when (selectedFilter) {
-                    AppFilter.ALL -> true
-                    AppFilter.ALLOWED -> app.packageName in allowed
-                }
-            }
+    val snapshots = session.snapshots(allowed, selectedFilter)
+    val visit = snapshots.order
+    val filterSnapshot = snapshots.filter
+    val orderedApps = remember(fcmApps, visit) {
+        visit.sorted(fcmApps, InstalledApp::packageName, InstalledApp::label)
+    }
+    val visibleApps = remember(orderedApps, query, selectedFilter, filterSnapshot) {
+        orderedApps.asSequence()
+            .filter { filterSnapshot.includes(it.packageName, selectedFilter) }
             .filter { app ->
                 query.isBlank() || app.label.contains(query, ignoreCase = true) ||
                     app.packageName.contains(query, ignoreCase = true)
             }
-            .sortedWith(
-                compareBy<InstalledApp> { if (it.packageName in allowed) 0 else 1 }
-                    .thenBy { it.label.lowercase() }
-            )
             .toList()
     }
 
@@ -598,7 +604,7 @@ private fun AppsScreen(
             )
 
             Text(
-                "$allowedFcmCount / ${fcmApps.size} 个已允许",
+                "$allowedFcmCount / ${fcmApps.size} 个已开启",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -617,12 +623,14 @@ private fun AppsScreen(
             visibleApps.isEmpty() -> EmptyAppsState(
                 title = when {
                     query.isNotBlank() -> "没有搜索结果"
-                    selectedFilter == AppFilter.ALLOWED -> "暂无已允许的 FCM 应用"
+                    selectedFilter == AppFilter.ALLOWED -> "暂无已开启的 FCM 应用"
+                    selectedFilter == AppFilter.DISABLED -> "暂无已关闭的 FCM 应用"
                     else -> "未检测到 FCM 应用"
                 },
                 message = when {
                     query.isNotBlank() -> "检查应用名称或包名是否正确。"
                     selectedFilter == AppFilter.ALLOWED -> "在列表中开启应用开关以允许 FCM 唤醒。"
+                    selectedFilter == AppFilter.DISABLED -> "当前 FCM 应用均已开启。"
                     else -> "列表只显示包含 Firebase Cloud Messaging 接收器的应用。"
                 },
                 onReload = onReloadApps,
@@ -822,6 +830,13 @@ private fun SettingsScreen(
             SettingsGroup(
                 title = "应用唤醒与通知",
                 items = listOf(
+                    SettingEntry(
+                        icon = ImageVector.vectorResource(R.drawable.ic_shield),
+                        title = "自动放行新应用",
+                        summary = "新安装的FCM应用默认开启",
+                        checked = config.autoAllowNewApps,
+                        onCheckedChange = { onConfigChange(config.copy(autoAllowNewApps = it)) }
+                    ),
                     SettingEntry(
                         icon = ImageVector.vectorResource(R.drawable.ic_notifications_active),
                         title = "保留应用停止前的通知",

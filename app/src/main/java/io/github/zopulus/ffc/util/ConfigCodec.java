@@ -3,7 +3,7 @@ package io.github.zopulus.ffc.util;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -21,15 +21,22 @@ public final class ConfigCodec {
             }
             values.put("revision", revision);
         }
-        Set<String> packages = new HashSet<>();
-        JSONArray list = json.getJSONArray("allowList");
-        for (int i = 0; i < list.length(); i++) {
-            Object name = list.get(i);
-            if (!(name instanceof String)) throw new IllegalArgumentException("Invalid package name");
-            packages.add((String) name);
+        values.put("allowList", readStringSet(json.getJSONArray("allowList")));
+        if (json.has(ConfigSchema.KEY_INSTALL_EVENTS)) {
+            values.put(ConfigSchema.KEY_INSTALL_EVENTS,
+                    readStringSet(json.getJSONArray(ConfigSchema.KEY_INSTALL_EVENTS)));
         }
-        values.put("allowList", packages);
         for (String key : ConfigSchema.OPTIONS) if (json.has(key)) values.put(key, json.get(key));
         return new ConfigSnapshot(values);
+    }
+
+    private static Set<String> readStringSet(JSONArray list) throws Exception {
+        Set<String> strings = new LinkedHashSet<>();
+        for (int i = 0; i < list.length(); i++) {
+            Object name = list.get(i);
+            if (!(name instanceof String)) throw new IllegalArgumentException("Invalid string list element");
+            strings.add((String) name);
+        }
+        return strings;
     }
 }

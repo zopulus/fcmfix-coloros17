@@ -10,10 +10,14 @@ public final class ConfigSchema {
     public static final String KEY_DEEP_SLEEP_GOOGLE_WHITELIST = "deepSleepGoogleWhitelist";
     public static final String KEY_DOZE_GOOGLE_WHITELIST = "dozeGoogleWhitelist";
     public static final String KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST = "rootDeepSleepNetworkWhitelist";
+    public static final String KEY_AUTO_ALLOW_NEW_APPS = "autoAllowNewApps";
+    public static final String KEY_INSTALL_EVENTS = "installEvents";
     public static final List<String> OPTIONS = List.of(KEY_DISABLE_AUTO_CLEAN_NOTIFICATION,
             KEY_INCLUDE_ICEBOX_DISABLED_APP, KEY_DEEP_SLEEP_GOOGLE_WHITELIST,
-            KEY_DOZE_GOOGLE_WHITELIST, KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST);
+            KEY_DOZE_GOOGLE_WHITELIST, KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST,
+            KEY_AUTO_ALLOW_NEW_APPS);
     public static boolean defaultValue(String key) {
-        return KEY_DEEP_SLEEP_GOOGLE_WHITELIST.equals(key) || KEY_DOZE_GOOGLE_WHITELIST.equals(key);
+        return KEY_DEEP_SLEEP_GOOGLE_WHITELIST.equals(key) || KEY_DOZE_GOOGLE_WHITELIST.equals(key)
+                || KEY_AUTO_ALLOW_NEW_APPS.equals(key);
     }
 }

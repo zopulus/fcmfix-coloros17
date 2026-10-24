@@ -5,6 +5,11 @@ import io.github.zopulus.ffc.util.ConfigSnapshot
 import io.github.zopulus.ffc.util.ConfigCodec
 import io.github.zopulus.ffc.util.ConfigFile
 import io.github.zopulus.ffc.util.ConfigSaveQueue
+import io.github.zopulus.ffc.util.ConfigPersistence
+import io.github.zopulus.ffc.util.FcmApps
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
 import android.content.ComponentName
 import android.content.Intent
 import android.content.SharedPreferences
@@ -52,7 +57,9 @@ data class FcmfixConfig(
     val includeIceBoxDisabledApps: Boolean = false,
     val deepSleepGoogleWhitelist: Boolean = defaultValue(KEY_DEEP_SLEEP_GOOGLE_WHITELIST),
     val dozeGoogleWhitelist: Boolean = defaultValue(KEY_DOZE_GOOGLE_WHITELIST),
-    val rootDeepSleepNetworkWhitelist: Boolean = false
+    val rootDeepSleepNetworkWhitelist: Boolean = false,
+    val autoAllowNewApps: Boolean = defaultValue(KEY_AUTO_ALLOW_NEW_APPS),
+    val installEvents: Set<String> = emptySet()
 )
 
 data class InstalledApp(
@@ -86,6 +93,9 @@ private object ConfigMemory {
 }
 
 class MainActivity : ComponentActivity() {
+    private val configObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) { loadConfigFromAvailableSource() }
+    }
     private var xposedService: XposedService?
         get() = ConfigMemory.xposedService
         set(value) { ConfigMemory.xposedService = value }
@@ -124,9 +134,9 @@ class MainActivity : ComponentActivity() {
             ConfigMemory.initialized = true
         }
         initializeDefaultConfigIfNeeded()
+        contentResolver.registerContentObserver(Uri.parse("content://$packageName.provider/config"), false, configObserver)
         if (uiState.value.config.includeIceBoxDisabledApps) requestIceBoxPermissionIfNeeded()
         bindXposedService()
-        loadInstalledApps()
 
         setContent {
             FcmfixTheme {
@@ -150,6 +160,13 @@ class MainActivity : ComponentActivity() {
         launcherIconHidden.value = packageManager.getComponentEnabledSetting(launcherAliasComponent) ==
             PackageManager.COMPONENT_ENABLED_STATE_DISABLED
         uiState.value = uiState.value.copy(xposedConnected = xposedService != null)
+        loadConfigFromAvailableSource()
+        loadInstalledApps()
+    }
+
+    override fun onDestroy() {
+        contentResolver.unregisterContentObserver(configObserver)
+        super.onDestroy()
     }
 
     private fun setLauncherIconHidden(hidden: Boolean) {
@@ -248,15 +265,25 @@ class MainActivity : ComponentActivity() {
                             && preferences.getLong("revision", 0) == localRevision)) {
                     val remote = configFromPreferences(preferences).normalized()
                     val revision = preferences.getLong("revision", 0)
-                    ConfigFile.write(applicationContext, remote.toJson().put("revision", revision))
+                    val localSaved = runCatching {
+                        ConfigFile.write(applicationContext, remote.toJson().put("revision", revision))
+                    }.onFailure { Log.w(TAG, "Local sync unavailable; using remote configuration", it) }.isSuccess
                     runOnUiThread {
                         if (generation == editGeneration) {
                             latestRevision = maxOf(latestRevision, revision)
-                            uiState.value = uiState.value.copy(config = remote, configSource = ConfigSource.LOCAL)
+                            uiState.value = uiState.value.copy(config = remote,
+                                configSource = if (localSaved) ConfigSource.LOCAL else ConfigSource.REMOTE)
                         }
                     }
                 } else if (persisted != null) {
-                    saveRemote(configFromJson(persisted).normalized(), localRevision)
+                    val local = configFromJson(persisted).normalized()
+                    saveRemote(local, localRevision)
+                    runOnUiThread {
+                        if (generation == editGeneration) {
+                            latestRevision = maxOf(latestRevision, localRevision)
+                            uiState.value = uiState.value.copy(config = local, configSource = ConfigSource.LOCAL)
+                        }
+                    }
                 }
                 applicationContext.sendBroadcast(Intent(ACTION_UPDATE_CONFIG))
             } catch (error: Throwable) { Log.w(TAG, "Config synchronization unavailable", error) }
@@ -269,7 +296,9 @@ class MainActivity : ComponentActivity() {
         includeIceBoxDisabledApps = snapshot.options.getValue(KEY_INCLUDE_ICEBOX_DISABLED_APP),
         deepSleepGoogleWhitelist = snapshot.options.getValue(KEY_DEEP_SLEEP_GOOGLE_WHITELIST),
         dozeGoogleWhitelist = snapshot.options.getValue(KEY_DOZE_GOOGLE_WHITELIST),
-        rootDeepSleepNetworkWhitelist = snapshot.options.getValue(KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST)
+        rootDeepSleepNetworkWhitelist = snapshot.options.getValue(KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST),
+        autoAllowNewApps = snapshot.options.getValue(KEY_AUTO_ALLOW_NEW_APPS),
+        installEvents = snapshot.installEvents.toSet()
     )
 
     private fun configFromJson(json: JSONObject) = configFromSnapshot(ConfigCodec.fromJson(json))
@@ -294,26 +323,55 @@ class MainActivity : ComponentActivity() {
     )
 
     private fun updateConfig(requested: FcmfixConfig) {
+        val previous = uiState.value.config
         val config = requested.normalized()
         if (config.includeIceBoxDisabledApps && !uiState.value.config.includeIceBoxDisabledApps) requestIceBoxPermissionIfNeeded()
         editGeneration++
+        val generation = editGeneration
         latestRevision = maxOf(latestRevision + 1, System.currentTimeMillis())
         val revision = latestRevision
         uiState.value = uiState.value.copy(config = config)
         ConfigSaveQueue.submit {
-            val localSaved = runCatching {
-                ConfigFile.write(applicationContext, config.toJson().put("revision", revision))
-            }.onFailure { Log.e(TAG, "Could not save local configuration", it) }.isSuccess
-            val remoteSaved = saveRemote(config, revision)
-            runOnUiThread {
-                if (!localSaved && !remoteSaved) {
+            val result = runCatching {
+                ConfigPersistence.save(
+                    object : ConfigPersistence.Store {
+                        override fun read(): JSONObject = ConfigFile.read(applicationContext)
+                        override fun write(json: JSONObject) { ConfigFile.write(applicationContext, json) }
+                    },
+                    object : ConfigPersistence.Store {
+                        override fun read(): JSONObject? {
+                            val values = xposedService?.getRemotePreferences("config")?.all ?: return null
+                            if (values["init"] != true) return null
+                            val snapshot = ConfigSnapshot(values)
+                            return configFromSnapshot(snapshot).toJson().put("revision", snapshot.revision)
+                        }
+                        override fun write(json: JSONObject) {
+                            if (!saveRemote(configFromJson(json).normalized(), json.getLong("revision"))) {
+                                throw java.io.IOException("Remote configuration save unavailable")
+                            }
+                        }
+                    }, previous.toJson(), config.toJson(), revision, System.currentTimeMillis())
+            }.onFailure { Log.e(TAG, "Could not prepare configuration save", it) }.getOrNull()
+            result?.localFailure?.let { Log.w(TAG, "Local configuration save failed", it) }
+            if (result == null || !result.localSaved && !result.remoteSaved) {
+                runOnUiThread {
                     Toast.makeText(this, "设置保存失败，请重试", Toast.LENGTH_SHORT).show()
-                    if (revision == latestRevision) loadConfigFromLocalFile()
-                } else if (revision == latestRevision) {
-                    uiState.value = uiState.value.copy(configSource = if (localSaved) ConfigSource.LOCAL else ConfigSource.REMOTE)
+                    if (generation == editGeneration) {
+                        uiState.value = uiState.value.copy(config = previous)
+                        loadConfigFromAvailableSource()
+                    }
                 }
-            }
-            if (localSaved || remoteSaved) {
+            } else {
+                val saved = result.config
+                val persistedConfig = configFromJson(saved).normalized()
+                val persistedRevision = saved.getLong("revision")
+                runOnUiThread {
+                    latestRevision = maxOf(latestRevision, persistedRevision)
+                    if (generation == editGeneration) {
+                        uiState.value = uiState.value.copy(config = persistedConfig,
+                            configSource = if (result.localSaved) ConfigSource.LOCAL else ConfigSource.REMOTE)
+                    }
+                }
                 applicationContext.sendBroadcast(Intent(ACTION_UPDATE_CONFIG))
             }
         }
@@ -325,6 +383,11 @@ class MainActivity : ComponentActivity() {
             ?.putBoolean("init", true)
             ?.putLong("revision", revision)
             ?.putStringSet("allowList", config.allowedPackages.toMutableSet())
+            ?.remove("autoAllowExcluded")
+            ?.remove("autoAllowOnNotificationGrant")
+            ?.remove("notificationEnableEvents")
+            ?.putStringSet(KEY_INSTALL_EVENTS, config.installEvents.toMutableSet())
+            ?.putBoolean(KEY_AUTO_ALLOW_NEW_APPS, config.autoAllowNewApps)
             ?.putBoolean(KEY_DISABLE_AUTO_CLEAN_NOTIFICATION, config.disableAutoCleanNotification)
             ?.putBoolean(KEY_INCLUDE_ICEBOX_DISABLED_APP, config.includeIceBoxDisabledApps)
             ?.putBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, config.deepSleepGoogleWhitelist)
@@ -338,6 +401,8 @@ class MainActivity : ComponentActivity() {
 
     private fun FcmfixConfig.toJson() = JSONObject()
         .put("allowList", JSONArray(allowedPackages.sorted()))
+        .put(KEY_INSTALL_EVENTS, JSONArray(installEvents.toList()))
+        .put(KEY_AUTO_ALLOW_NEW_APPS, autoAllowNewApps)
         .put(KEY_DISABLE_AUTO_CLEAN_NOTIFICATION, disableAutoCleanNotification)
         .put(KEY_INCLUDE_ICEBOX_DISABLED_APP, includeIceBoxDisabledApps)
         .put(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, deepSleepGoogleWhitelist)
@@ -386,8 +451,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun isFcmReceiver(receiver: ActivityInfo): Boolean =
-        receiver.name == "com.google.firebase.iid.FirebaseInstanceIdReceiver" ||
-            receiver.name == "com.google.android.gms.measurement.AppMeasurementReceiver"
+        FcmApps.isReceiverName(receiver.name)
 
     private fun drawableToBitmap(drawable: Drawable): Bitmap {
         val size = (96 * resources.displayMetrics.density / 2f).toInt().coerceIn(72, 144)
