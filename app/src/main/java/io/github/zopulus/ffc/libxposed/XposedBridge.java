@@ -3,7 +3,6 @@ package io.github.zopulus.ffc.libxposed;
 import android.content.SharedPreferences;
 
 import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Member;
 import java.lang.reflect.Method;
 
@@ -65,30 +64,6 @@ public final class XposedBridge {
             log("deoptimize failed: " + member + ": " + e);
             return false;
         }
-    }
-
-    public static Object invokeOriginalMethod(Member method, Object thisObject, Object[] args) throws Throwable {
-        ensureInit();
-        if (method instanceof Method) {
-            Method m = (Method) method;
-            XposedInterface.Invoker<?, Method> invoker = xposedInterface.getInvoker(m);
-            invoker.setType(XposedInterface.Invoker.Type.ORIGIN);
-            try {
-                return invoker.invoke(thisObject, args);
-            } catch (InvocationTargetException e) {
-                throw e.getCause();
-            }
-        }
-        if (method instanceof Constructor<?>) {
-            Constructor<?> c = (Constructor<?>) method;
-            XposedInterface.CtorInvoker<?> invoker = xposedInterface.getInvoker(c);
-            try {
-                return invoker.newInstance(args);
-            } catch (InvocationTargetException e) {
-                throw e.getCause();
-            }
-        }
-        throw new IllegalArgumentException("Unsupported member type: " + method);
     }
 
     static final class HookHandleWrapper {

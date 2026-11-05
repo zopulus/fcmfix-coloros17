@@ -189,11 +189,11 @@ public abstract class XposedModule {
 
     private static final DiagnosticLogger diagnosticLogger = new DiagnosticLogger(
             text -> XposedBridge.log("[fcmfix] " + text),
-            error -> Log.w(TAG, "Diagnostic relay failed; further relay warnings suppressed", error));
+            error -> Log.w(TAG, "Diagnostic log failed; further logging warnings suppressed", error));
 
     protected static void printLog(String text, Boolean diagnostic) {
         diagnosticLogger.log("[" + getSelfPackageName() + "]" + text, Boolean.TRUE.equals(diagnostic),
-                SystemClock.elapsedRealtime(), null);
+                SystemClock.elapsedRealtime());
     }
 
     protected void checkUserDeviceUnlockAndUpdateConfig() {

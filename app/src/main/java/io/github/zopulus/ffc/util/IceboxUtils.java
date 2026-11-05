@@ -86,10 +86,6 @@ public class IceboxUtils extends BroadcastReceiver {
         context.getContentResolver().call(PERMISSION_URI, "set_enable", null, extra);
     }
 
-    public static void activeApp(Context context, String pkg) {
-        activeAppBeforeDeadline(context, pkg, Long.MAX_VALUE);
-    }
-
     public static void activeAppBeforeDeadline(Context context, String pkg, long deadline) {
         try {
             if (SystemClock.elapsedRealtime() >= deadline) return;
