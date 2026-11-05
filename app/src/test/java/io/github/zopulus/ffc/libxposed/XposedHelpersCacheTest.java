@@ -2,6 +2,7 @@ package io.github.zopulus.ffc.libxposed;
 
 import org.junit.Test;
 import java.io.InputStream;
+import java.lang.reflect.Field;
 import static org.junit.Assert.*;
 
 public class XposedHelpersCacheTest {
@@ -16,10 +17,10 @@ public class XposedHelpersCacheTest {
     }
     @Test public void fieldCacheStoresMetadataNotObjectValues() {
         Fixture first = new Fixture(), second = new Fixture();
-        XposedHelpers.setObjectField(first, "value", "changed");
+        first.value = "changed";
         assertEquals("changed", XposedHelpers.getObjectField(first, "value"));
         assertEquals("initial", XposedHelpers.getObjectField(second, "value"));
-        XposedHelpers.setObjectField(first, "value", "again");
+        first.value = "again";
         assertEquals("again", XposedHelpers.getObjectField(first, "value"));
     }
     @Test public void inheritedAndShadowedFieldsStaySeparate() {
@@ -69,8 +70,11 @@ public class XposedHelpersCacheTest {
         Class<?> a = first.loadClass(name), b = second.loadClass(name);
         assertNotSame(a, b);
         Object one = a.getDeclaredConstructor().newInstance(), two = b.getDeclaredConstructor().newInstance();
-        XposedHelpers.setObjectField(one, "value", "one");
-        XposedHelpers.setObjectField(two, "value", "two");
+        Field aValue = a.getDeclaredField("value"), bValue = b.getDeclaredField("value");
+        aValue.setAccessible(true);
+        bValue.setAccessible(true);
+        aValue.set(one, "one");
+        bValue.set(two, "two");
         assertEquals("one", XposedHelpers.getObjectField(one, "value"));
         assertEquals("two", XposedHelpers.getObjectField(two, "value"));
         assertEquals("string", XposedHelpers.callMethod(one, "choose", "x"));

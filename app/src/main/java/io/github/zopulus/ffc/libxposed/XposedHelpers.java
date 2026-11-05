@@ -1,10 +1,7 @@
 package io.github.zopulus.ffc.libxposed;
 
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -69,16 +66,6 @@ public final class XposedHelpers {
         }
     }
 
-    public static Constructor<?> findConstructorExact(Class<?> clazz, Class<?>... parameterTypes) {
-        try {
-            Constructor<?> constructor = clazz.getDeclaredConstructor(parameterTypes);
-            constructor.setAccessible(true);
-            return constructor;
-        } catch (NoSuchMethodException e) {
-            throw new NoSuchMethodError(clazz.getName() + "#<init>");
-        }
-    }
-
     public static XC_MethodHook.Unhook findAndHookMethod(String className, ClassLoader classLoader,
                                                           String methodName, Object... parameterTypesAndCallback) {
         return findAndHookMethod(findClass(className, classLoader), methodName, parameterTypesAndCallback);
@@ -91,52 +78,10 @@ public final class XposedHelpers {
         return XposedBridge.hookMethod(method, parsed.callback);
     }
 
-    public static XC_MethodHook.Unhook findAndHookConstructor(Class<?> clazz, Object... parameterTypesAndCallback) {
-        ParsedHookArgs parsed = parseHookArgs(parameterTypesAndCallback);
-        Constructor<?> constructor = findConstructorExact(clazz, parsed.parameterTypes);
-        return XposedBridge.hookMethod(constructor, parsed.callback);
-    }
-
     public static Object getObjectField(Object obj, String fieldName) {
         try {
             Field field = findField(obj.getClass(), fieldName);
             return field.get(obj);
-        } catch (IllegalAccessException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    public static void setObjectField(Object obj, String fieldName, Object value) {
-        try {
-            Field field = findField(obj.getClass(), fieldName);
-            field.set(obj, value);
-        } catch (IllegalAccessException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    public static long getLongField(Object obj, String fieldName) {
-        try {
-            Field field = findField(obj.getClass(), fieldName);
-            return field.getLong(obj);
-        } catch (IllegalAccessException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    public static Object getStaticObjectField(Class<?> clazz, String fieldName) {
-        try {
-            Field field = findField(clazz, fieldName);
-            return field.get(null);
-        } catch (IllegalAccessException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    public static void setStaticBooleanField(Class<?> clazz, String fieldName, boolean value) {
-        try {
-            Field field = findField(clazz, fieldName);
-            field.setBoolean(null, value);
         } catch (IllegalAccessException e) {
             throw new RuntimeException(e);
         }
