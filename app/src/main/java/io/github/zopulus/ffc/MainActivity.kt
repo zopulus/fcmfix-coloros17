@@ -12,7 +12,6 @@ import android.os.Handler
 import android.os.Looper
 import android.content.ComponentName
 import android.content.Intent
-import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageInfo
@@ -47,6 +46,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.text.Collator
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "fcmfix-ui"
 private const val ACTION_UPDATE_CONFIG = "io.github.zopulus.ffc.update.config"
@@ -111,6 +111,7 @@ private object ConfigMemory : XposedServiceHelper.OnServiceListener {
 }
 
 class MainActivity : ComponentActivity() {
+    private val configRefreshQueued = AtomicBoolean()
     private val configObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean) { loadConfigFromAvailableSource() }
     }
@@ -249,8 +250,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadConfigFromAvailableSource() {
+        if (!configRefreshQueued.compareAndSet(false, true)) return
         val generation = editGeneration
         ConfigSaveQueue.submit {
+            // Coalesce waiting reads, but allow a new refresh once this read starts.
+            configRefreshQueued.set(false)
             try {
                 // Read when this queued task actually executes, after earlier edits finish.
                 val persisted = runCatching { ConfigFile.read(applicationContext) }.getOrNull()
@@ -262,8 +266,9 @@ class MainActivity : ComponentActivity() {
                         // remote settings over a freshly bootstrapped default file.
                         || persisted?.optBoolean("bootstrapDefaults", false) == true
                             && preferences.getLong("revision", 0) == localRevision)) {
-                    val remote = configFromPreferences(preferences).normalized()
-                    val revision = preferences.getLong("revision", 0)
+                    val remoteSnapshot = ConfigSnapshot(preferences.all)
+                    val remote = configFromSnapshot(remoteSnapshot)
+                    val revision = remoteSnapshot.revision
                     val localSaved = runCatching {
                         ConfigFile.write(applicationContext, remote.toJson().put("revision", revision))
                     }.onFailure { Log.w(TAG, "Local sync unavailable; using remote configuration", it) }.isSuccess
@@ -275,8 +280,9 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 } else if (persisted != null) {
-                    val local = configFromJson(persisted).normalized()
-                    saveRemote(local, localRevision)
+                    val localSnapshot = ConfigCodec.fromJson(persisted)
+                    val local = configFromSnapshot(localSnapshot)
+                    saveRemote(localSnapshot)
                     runOnUiThread {
                         if (generation == editGeneration) {
                             latestRevision = maxOf(latestRevision, localRevision)
@@ -301,9 +307,6 @@ class MainActivity : ComponentActivity() {
     )
 
     private fun configFromJson(json: JSONObject) = configFromSnapshot(ConfigCodec.fromJson(json))
-
-    private fun configFromPreferences(preferences: SharedPreferences) =
-        configFromSnapshot(ConfigSnapshot(preferences.all))
 
     private fun loadConfigFromLocalFile() {
         try {
@@ -345,7 +348,7 @@ class MainActivity : ComponentActivity() {
                             return configFromSnapshot(snapshot).toJson().put("revision", snapshot.revision)
                         }
                         override fun write(json: JSONObject) {
-                            if (!saveRemote(configFromJson(json).normalized(), json.getLong("revision"))) {
+                            if (!saveRemote(ConfigCodec.fromJson(json))) {
                                 throw java.io.IOException("Remote configuration save unavailable")
                             }
                         }
@@ -362,7 +365,7 @@ class MainActivity : ComponentActivity() {
                 }
             } else {
                 val saved = result.config
-                val persistedConfig = configFromJson(saved).normalized()
+                val persistedConfig = configFromJson(saved)
                 val persistedRevision = saved.getLong("revision")
                 runOnUiThread {
                     latestRevision = maxOf(latestRevision, persistedRevision)
@@ -376,23 +379,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun saveRemote(config: FcmfixConfig, revision: Long): Boolean = try {
-        xposedService?.getRemotePreferences("config")?.edit()
-            ?.remove("disableGoogleNetworkControl")
-            ?.putBoolean("init", true)
-            ?.putLong("revision", revision)
-            ?.putStringSet("allowList", config.allowedPackages.toMutableSet())
-            ?.remove("autoAllowExcluded")
-            ?.remove("autoAllowOnNotificationGrant")
-            ?.remove("notificationEnableEvents")
-            ?.putStringSet(KEY_INSTALL_EVENTS, config.installEvents.toMutableSet())
-            ?.putBoolean(KEY_AUTO_ALLOW_NEW_APPS, config.autoAllowNewApps)
-            ?.putBoolean(KEY_DISABLE_AUTO_CLEAN_NOTIFICATION, config.disableAutoCleanNotification)
-            ?.putBoolean(KEY_INCLUDE_ICEBOX_DISABLED_APP, config.includeIceBoxDisabledApps)
-            ?.putBoolean(KEY_DEEP_SLEEP_GOOGLE_WHITELIST, config.deepSleepGoogleWhitelist)
-            ?.putBoolean(KEY_DOZE_GOOGLE_WHITELIST, config.dozeGoogleWhitelist)
-            ?.putBoolean(KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST, config.rootDeepSleepNetworkWhitelist)
-            ?.commit() ?: false
+    private fun saveRemote(snapshot: ConfigSnapshot): Boolean = try {
+        val preferences = xposedService?.getRemotePreferences("config")
+        when {
+            preferences == null -> false
+            snapshot.matchesPreferences(preferences.all) -> true
+            else -> {
+                val editor = preferences.edit()
+                    .putBoolean("init", true)
+                    .putLong("revision", snapshot.revision)
+                    .putStringSet("allowList", snapshot.allowList.toMutableSet())
+                    .putStringSet(KEY_INSTALL_EVENTS, snapshot.installEvents.toMutableSet())
+                RETIRED_KEYS.forEach(editor::remove)
+                snapshot.options.forEach { (key, enabled) -> editor.putBoolean(key, enabled) }
+                editor.commit()
+            }
+        }
     } catch (error: Throwable) {
         Log.w(TAG, "Remote save unavailable; local configuration is retained", error)
         false

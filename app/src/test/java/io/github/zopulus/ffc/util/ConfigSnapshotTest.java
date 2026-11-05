@@ -5,6 +5,73 @@ import java.util.*;
 import static org.junit.Assert.*;
 
 public class ConfigSnapshotTest {
+    private static Map<String, Object> storedValues() {
+        Map<String, Object> values = new HashMap<>();
+        values.put("init", true);
+        values.put("revision", 7L);
+        values.put("allowList", Set.of("target"));
+        values.put("installEvents", Set.of("installation"));
+        for (String key : ConfigSchema.OPTIONS) values.put(key, ConfigSchema.defaultValue(key));
+        return values;
+    }
+
+    @Test public void matchingRemoteValuesCanSkipWriting() {
+        Map<String, Object> values = storedValues();
+        ConfigSnapshot snapshot = new ConfigSnapshot(values);
+        assertTrue(snapshot.matchesPreferences(values));
+        values.put("unrelated", "preserve");
+        assertTrue(snapshot.matchesPreferences(values));
+    }
+
+    @Test public void matchingRevisionStillRequiresAllConfigurationContent() {
+        Map<String, Object> values = storedValues();
+        ConfigSnapshot snapshot = new ConfigSnapshot(values);
+        Map<String, Object> changed = new HashMap<>(values);
+        changed.put("allowList", Set.of("other"));
+        assertFalse(snapshot.matchesPreferences(changed));
+        changed = new HashMap<>(values);
+        changed.put("installEvents", Set.of("another installation"));
+        assertFalse(snapshot.matchesPreferences(changed));
+        for (String key : ConfigSchema.OPTIONS) {
+            changed = new HashMap<>(values);
+            changed.put(key, !snapshot.options.get(key));
+            assertFalse(key, snapshot.matchesPreferences(changed));
+        }
+        changed = new HashMap<>(values);
+        changed.put("revision", 8L);
+        assertFalse(snapshot.matchesPreferences(changed));
+    }
+
+    @Test public void uninitializedAndPartialPreferencesMustBeWritten() {
+        Map<String, Object> values = storedValues();
+        ConfigSnapshot snapshot = new ConfigSnapshot(values);
+        for (String key : values.keySet()) {
+            Map<String, Object> partial = new HashMap<>(values);
+            partial.remove(key);
+            assertFalse(key, snapshot.matchesPreferences(partial));
+        }
+        values.put("init", false);
+        assertFalse(snapshot.matchesPreferences(values));
+    }
+
+    @Test public void retiredOptionsRequireMigrationEvenWhenCurrentValuesMatch() {
+        Map<String, Object> values = storedValues();
+        ConfigSnapshot snapshot = new ConfigSnapshot(values);
+        for (String key : List.of("disableGoogleNetworkControl", "autoAllowExcluded",
+                "autoAllowOnNotificationGrant", "notificationEnableEvents")) {
+            Map<String, Object> legacy = new HashMap<>(values);
+            legacy.put(key, false);
+            assertFalse(key, snapshot.matchesPreferences(legacy));
+        }
+    }
+
+    @Test public void normalizedSnapshotMustRepairContradictoryStoredFlags() {
+        Map<String, Object> values = storedValues();
+        values.put("deepSleepGoogleWhitelist", false);
+        values.put("rootDeepSleepNetworkWhitelist", true);
+        assertFalse(new ConfigSnapshot(values).matchesPreferences(values));
+    }
+
     @Test public void revisionIsPreservedAndInvalidValuesRejected() {
         assertEquals(0, new ConfigSnapshot(Collections.emptyMap()).revision);
         assertEquals(123, new ConfigSnapshot(Collections.singletonMap("revision", 123L)).revision);

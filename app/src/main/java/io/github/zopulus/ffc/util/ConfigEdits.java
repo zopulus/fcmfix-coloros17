@@ -30,9 +30,7 @@ public final class ConfigEdits {
         return result;
     }
     static void removeRetiredOptions(JSONObject json) {
-        json.remove("autoAllowExcluded");
-        json.remove("autoAllowOnNotificationGrant");
-        json.remove("notificationEnableEvents");
+        for (String key : ConfigSchema.RETIRED_KEYS) json.remove(key);
     }
     public static long nextRevision(long previous, long now) {
         return Math.max(Math.addExact(previous, 1), now);

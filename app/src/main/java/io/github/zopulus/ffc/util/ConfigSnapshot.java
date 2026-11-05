@@ -31,6 +31,17 @@ public final class ConfigSnapshot {
         options = Collections.unmodifiableMap(flags);
     }
 
+    /** A no-op write must also preserve initialization and finish schema migration. */
+    public boolean matchesPreferences(Map<String, ?> values) {
+        if (!Boolean.TRUE.equals(values.get("init"))
+                || !Long.valueOf(revision).equals(values.get("revision"))
+                || !allowList.equals(values.get("allowList"))
+                || !installEvents.equals(values.get(ConfigSchema.KEY_INSTALL_EVENTS))) return false;
+        for (String key : ConfigSchema.OPTIONS)
+            if (!options.get(key).equals(values.get(key))) return false;
+        return Collections.disjoint(values.keySet(), ConfigSchema.RETIRED_KEYS);
+    }
+
     private static Set<String> readStringSet(Map<String, ?> values, String key) {
         Set<String> strings = new LinkedHashSet<>();
         Object raw = values.get(key);

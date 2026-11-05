@@ -253,9 +253,7 @@ public abstract class XposedModule {
                     isBootComplete = true;
                     notifyConfigLoaded(previous);
                 } catch (Throwable e) {
-                    printLog("Remote config failed: " + e.getMessage());
-                    try { loadConfigFromContentProvider(); isBootComplete = true; notifyConfigLoaded(previous); }
-                    catch (Throwable fallback) { printLog("Provider config failed: " + fallback.getMessage()); }
+                    printLog("Config reload failed: " + e.getMessage());
                 }
             }
         }, "FCMFix-config");

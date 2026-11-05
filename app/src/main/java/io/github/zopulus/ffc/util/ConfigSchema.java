@@ -12,6 +12,8 @@ public final class ConfigSchema {
     public static final String KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST = "rootDeepSleepNetworkWhitelist";
     public static final String KEY_AUTO_ALLOW_NEW_APPS = "autoAllowNewApps";
     public static final String KEY_INSTALL_EVENTS = "installEvents";
+    public static final List<String> RETIRED_KEYS = List.of("disableGoogleNetworkControl",
+            "autoAllowExcluded", "autoAllowOnNotificationGrant", "notificationEnableEvents");
     public static final List<String> OPTIONS = List.of(KEY_DISABLE_AUTO_CLEAN_NOTIFICATION,
             KEY_INCLUDE_ICEBOX_DISABLED_APP, KEY_DEEP_SLEEP_GOOGLE_WHITELIST,
             KEY_DOZE_GOOGLE_WHITELIST, KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST,
