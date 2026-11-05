@@ -368,10 +368,7 @@ public class OplusProxyFix extends XposedModule {
                             return;
                         }
 
-                        String target = getIntentTarget(intent);
-                        if (target == null) {
-                            target = findAllowedPackageArgument(param.args);
-                        }
+                        String target = explicitTarget(intent);
                         if (trustedDelivery(intent, target, param)) {
                             printLog("Oplus shouldProxy bypass: pkg=" + target
                                     + ", action=" + intent.getAction(), true);
@@ -408,7 +405,7 @@ public class OplusProxyFix extends XposedModule {
                 protected void beforeHookedMethod(MethodHookParam param) {
                     Intent intent = findIntentArgument(param.args);
                     if (intent == null || !isFCMAction(intent.getAction())) return;
-                    String target = getIntentTarget(intent);
+                    String target = explicitTarget(intent);
                     if (trustedDelivery(intent, target, param)) {
                         printLog("Oplus CpnProxy broadcast bypass: pkg=" + target, true);
                         param.setResult(false);
@@ -752,8 +749,7 @@ public class OplusProxyFix extends XposedModule {
                     Intent intent = findIntentArgument(param.args);
                     if (intent == null || !isFCMIntent(intent)) return;
 
-                    String target = getIntentTarget(intent);
-                    if (target == null) target = findCalleePackage(param.args);
+                    String target = explicitTarget(intent);
                     if (trustedDelivery(intent, target, param)) {
                         printLog("Oplus classify restriction bypass: pkg=" + target
                                 + ", action=" + intent.getAction(), true);
@@ -792,8 +788,9 @@ public class OplusProxyFix extends XposedModule {
                             && !hasStringArgument(param.args, START_PROCESS_FROM_GCM_BIND_SERVICE)) {
                         return;
                     }
-                    String target = findCalleePackage(param.args);
-                    if (trustedDelivery(findIntentArgument(param.args), target, param)) {
+                    Intent intent = findIntentArgument(param.args);
+                    String target = explicitTarget(intent);
+                    if (trustedDelivery(intent, target, param)) {
                         printLog("Oplus GCM bind-service bypass: pkg=" + target, true);
                         param.setResult(true);
                     }
@@ -826,7 +823,7 @@ public class OplusProxyFix extends XposedModule {
                     Intent intent = findIntentArgument(param.args);
                     if (intent == null || !isFCMIntent(intent)) return;
 
-                    String target = findCalleePackage(param.args);
+                    String target = explicitTarget(intent);
                     if (trustedDelivery(intent, target, param)) {
                         printLog("Oplus FCM start-service bypass: pkg=" + target
                                 + ", action=" + intent.getAction(), true);
@@ -896,44 +893,6 @@ public class OplusProxyFix extends XposedModule {
             printLog("Oplus restriction hook active: " + describeMethod(method));
         }
         return hooks;
-    }
-
-    private String getIntentTarget(Intent intent) {
-        if (intent.getComponent() != null) {
-            return intent.getComponent().getPackageName();
-        }
-        return intent.getPackage();
-    }
-
-    private String findAllowedPackageArgument(Object[] args) {
-        for (Object arg : args) {
-            if (arg instanceof String && targetIsAllow((String) arg)) {
-                return (String) arg;
-            }
-        }
-        return null;
-    }
-
-    private String findCalleePackage(Object[] args) {
-        Intent intent = findIntentArgument(args);
-        if (intent != null) {
-            String target = getIntentTarget(intent);
-            if (target != null) return target;
-        }
-        for (Object arg : args) {
-            if (arg instanceof ApplicationInfo) {
-                return ((ApplicationInfo) arg).packageName;
-            }
-            if (arg == null) continue;
-            try {
-                Object appInfo = XposedHelpers.getObjectField(arg, "appInfo");
-                if (appInfo instanceof ApplicationInfo) {
-                    return ((ApplicationInfo) appInfo).packageName;
-                }
-            } catch (Throwable ignored) {
-            }
-        }
-        return findAllowedPackageArgument(args);
     }
 
     private boolean hasStringArgument(Object[] args, String expected) {
