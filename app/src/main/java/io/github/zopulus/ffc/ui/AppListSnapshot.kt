@@ -16,9 +16,11 @@ internal class AppListSnapshot(allowedPackages: Set<String>) {
         AppFilter.DISABLED -> packageName !in allowed
     }
 
-    fun <T> sorted(apps: List<T>, packageName: (T) -> String, label: (T) -> String): List<T> =
-        apps.sortedWith(compareBy<T> { if (packageName(it) in allowed) 0 else 1 }
-            .thenBy { label(it).lowercase() })
+    /** Keep the caller's locale-aware name order within each group. */
+    fun <T> grouped(apps: List<T>, packageName: (T) -> String): List<T> {
+        val (enabled, disabled) = apps.partition { packageName(it) in allowed }
+        return enabled + disabled
+    }
 }
 
 /** Follow initial/external loads until the user edits this visit; preserve positions afterward. */

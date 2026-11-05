@@ -291,8 +291,7 @@ private fun HomeScreen(
     onOpenProject: () -> Unit
 ) {
     val config = state.config
-    val fcmApps = apps.filter(InstalledApp::hasFcmReceiver)
-    val allowedFcmCount = fcmApps.count { it.packageName in config.allowedPackages }
+    val allowedFcmCount = apps.count { it.packageName in config.allowedPackages }
     val enabledGoogleProtections = listOf(
         config.deepSleepGoogleWhitelist,
         config.dozeGoogleWhitelist
@@ -311,10 +310,10 @@ private fun HomeScreen(
                 HomeInfoItem(
                     icon = ImageVector.vectorResource(R.drawable.ic_notifications),
                     title = "FCM 应用唤醒",
-                    summary = if (state.appsLoading) "正在读取应用列表" else if (state.appsLoadFailed) {
+                    summary = if (state.appsLoading && apps.isEmpty()) "正在读取应用列表" else if (state.appsLoadFailed && apps.isEmpty()) {
                         "无法读取应用列表"
                     } else {
-                        "$allowedFcmCount / ${fcmApps.size} 个应用已允许"
+                        "$allowedFcmCount / ${apps.size} 个应用已允许"
                     },
                     onClick = onOpenApps
                 ),
@@ -505,7 +504,6 @@ private fun AppListActions(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
-    val fcmApps = remember(apps) { apps.filter(InstalledApp::hasFcmReceiver) }
     Box {
         IconButton(onClick = {
             haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
@@ -539,16 +537,16 @@ private fun AppListActions(
             ) {
                 SelectableDropdownMenuItem(
                     shapes = MenuDefaults.itemShape(index = 0, count = 1),
-                    selected = fcmApps.isNotEmpty() && fcmApps.all { it.packageName in state.config.allowedPackages },
+                    selected = apps.isNotEmpty() && apps.all { it.packageName in state.config.allowedPackages },
                     text = { Text("全选") },
-                    enabled = !state.appsLoading && !state.appsLoadFailed && fcmApps.isNotEmpty(),
+                    enabled = !state.appsLoading && !state.appsLoadFailed && apps.isNotEmpty(),
                     selectedLeadingIcon = {
                         Icon(Icons.Filled.Check, contentDescription = null,
                             modifier = Modifier.size(MenuDefaults.LeadingIconSize))
                     },
                     onClick = {
                         haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
-                        val detected = fcmApps.mapTo(mutableSetOf(), InstalledApp::packageName)
+                        val detected = apps.mapTo(mutableSetOf(), InstalledApp::packageName)
                         onConfigChange(state.config.copy(allowedPackages = state.config.allowedPackages + detected))
                         expanded = false
                     }
@@ -570,13 +568,12 @@ private fun AppsScreen(
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     val allowed = state.config.allowedPackages
-    val fcmApps = remember(apps) { apps.filter(InstalledApp::hasFcmReceiver) }
-    val allowedFcmCount = fcmApps.count { it.packageName in allowed }
+    val allowedFcmCount = apps.count { it.packageName in allowed }
     val snapshots = session.snapshots(allowed, selectedFilter)
     val visit = snapshots.order
     val filterSnapshot = snapshots.filter
-    val orderedApps = remember(fcmApps, visit) {
-        visit.sorted(fcmApps, InstalledApp::packageName, InstalledApp::label)
+    val orderedApps = remember(apps, visit) {
+        visit.grouped(apps, InstalledApp::packageName)
     }
     val visibleApps = remember(orderedApps, query, selectedFilter, filterSnapshot) {
         orderedApps.asSequence()
@@ -604,18 +601,22 @@ private fun AppsScreen(
             )
 
             Text(
-                "$allowedFcmCount / ${fcmApps.size} 个已开启",
+                "$allowedFcmCount / ${apps.size} 个已开启" + if (state.appsLoading) " · 刷新中" else "",
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
         }
 
+        if (state.appsLoadFailed && apps.isNotEmpty()) {
+            TextButton(onClick = onReloadApps) { Text("刷新失败，点击重试") }
+        }
+
         when {
-            state.appsLoading -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            state.appsLoading && apps.isEmpty() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
-            state.appsLoadFailed -> EmptyAppsState(
+            state.appsLoadFailed && apps.isEmpty() -> EmptyAppsState(
                 title = "无法读取 FCM 应用",
                 message = "请检查应用列表权限后重试。",
                 onReload = onReloadApps
