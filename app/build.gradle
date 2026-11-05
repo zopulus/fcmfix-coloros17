@@ -10,8 +10,8 @@ android {
         // ClassValue requires API 34; this fork supports ColorOS17 only.
         minSdkVersion 34
         targetSdkVersion 34
-        versionCode 93
-        versionName "2026102401"
+        versionCode 94
+        versionName "2026110501"
 
         ndk {
             abiFilters "arm64-v8a"
