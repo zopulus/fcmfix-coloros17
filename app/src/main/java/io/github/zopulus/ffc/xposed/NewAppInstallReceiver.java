@@ -1,12 +1,10 @@
 package io.github.zopulus.ffc.xposed;
 
-import android.annotation.SuppressLint;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import io.github.zopulus.ffc.util.NewAppAutoAllow;
 import io.github.zopulus.ffc.util.RetryingTask;
@@ -28,7 +26,6 @@ public final class NewAppInstallReceiver extends XposedModule {
 
     public NewAppInstallReceiver(ClassLoader loader) { super(loader); }
 
-    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     @Override protected synchronized void onCanReadConfig() {
         if (registered || context == null) return;
         IntentFilter filter = new IntentFilter(Intent.ACTION_PACKAGE_ADDED);
@@ -49,8 +46,7 @@ public final class NewAppInstallReceiver extends XposedModule {
                 }, () -> reportInstallation(receiverContext, target, extras), 200, 600, 1500).request();
             }
         };
-        if (Build.VERSION.SDK_INT >= 33) context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        else context.registerReceiver(receiver, filter);
+        context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
         registered = true;
     }
 

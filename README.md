@@ -4,6 +4,8 @@
 
 适配 Material 3 Expressive UI。
 
+仅适配 ColorOS17；安装包最低要求 Android 14（API 34），与反射缓存使用的系统 API 一致。
+
 ## 功能
 
 - 在系统广播投递路径中识别可信 FCM 广播，允许名单中的应用被唤醒

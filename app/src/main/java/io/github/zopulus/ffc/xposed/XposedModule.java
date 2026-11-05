@@ -16,7 +16,6 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
-import android.os.Build;
 import android.os.UserManager;
 import android.util.Log;
 
@@ -322,7 +321,6 @@ public abstract class XposedModule {
         }
     }
 
-    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private static synchronized boolean initReceiver() {
         if (context == null) return false;
         if (!updateReceiverRegistered) {
@@ -335,9 +333,8 @@ public abstract class XposedModule {
                         }
                     }
                 };
-                if (Build.VERSION.SDK_INT >= 34) context.registerReceiver(receiver, filter,
+                context.registerReceiver(receiver, filter,
                         SELF_PACKAGE_NAME + ".permission.CONFIG", null, Context.RECEIVER_EXPORTED);
-                else context.registerReceiver(receiver, filter, SELF_PACKAGE_NAME + ".permission.CONFIG", null);
                 updateReceiverRegistered = true;
             } catch (Throwable error) { printLog("Config receiver registration will retry: " + error); }
         }
