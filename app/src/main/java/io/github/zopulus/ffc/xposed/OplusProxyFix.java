@@ -12,7 +12,6 @@ import io.github.zopulus.ffc.libxposed.XposedBridge;
 import io.github.zopulus.ffc.libxposed.XposedHelpers;
 
 import io.github.zopulus.ffc.util.FcmTrust;
-import io.github.zopulus.ffc.util.ProtectionId;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -76,25 +75,25 @@ public class OplusProxyFix extends XposedModule {
 
     public OplusProxyFix(ClassLoader classLoader) {
         super(classLoader);
-        HookRegistry.install(ProtectionId.PROXY_WAKELOCK, this::startHookOplusProxyWakeLock);
-        HookRegistry.install(ProtectionId.PROXY_BROADCAST, this::startHookOplusProxyBroadcast);
-        HookRegistry.install(ProtectionId.GMS_RESTRICTION_SETTER, this::startHookSetGmsRestricted);
-        HookRegistry.install(ProtectionId.GOOGLE_RESTRICTION_INFO, this::startHookIsGoogleRestricInfoOn);
-        HookRegistry.install(ProtectionId.APP_CLASSIFICATION, this::startHookAppClassifyRestricted);
-        HookRegistry.install(ProtectionId.GCM_BIND, this::startHookGcmBindService);
-        HookRegistry.install(ProtectionId.FCM_SERVICE_START, this::startHookFcmStartService);
-        HookRegistry.install(ProtectionId.SYSTEM_COMPONENT_RESTRICTION, this::startHookHansGmsRestriction);
-        HookRegistry.install(ProtectionId.APP_NETWORK_CONTROL, this::startHookOAppNetControlService);
-        HookRegistry.install(ProtectionId.HANS_SCENE_WINDOW, this::startHookHansFcmWindow);
-        HookRegistry.install(ProtectionId.HANS_CGROUP_WINDOW, this::startHookHansCGroupFcmWindow);
-        HookRegistry.install(ProtectionId.CPN_PROXY, this::startHookCpnProxyBroadcast);
-        HookRegistry.install(ProtectionId.GMS_RESTRICTION_STATE, this::startHookIsGmsRestricted);
-        HookRegistry.install(ProtectionId.WEAK_SIGNAL_WHITELIST, this::startHookWeakSignalNetWhiteList);
-        HookRegistry.install(ProtectionId.BROADCAST_PROCESS_START, this::startHookValidStartFromBroadcast);
-        HookRegistry.install(ProtectionId.MALICIOUS_BROADCAST, this::startHookMaliciousBroadcast);
-        HookRegistry.install(ProtectionId.MALICIOUS_SERVICE, this::startHookMaliciousService);
-        HookRegistry.install(ProtectionId.LINK_START_BROADCAST, this::startHookLinkStartBroadcast);
-        HookRegistry.install(ProtectionId.HANS_JOB_WINDOW, this::startHookHansJobWindow);
+        HookInstaller.install("OplusProxyWakeLock", this::startHookOplusProxyWakeLock);
+        HookInstaller.install("OplusProxyBroadcast", this::startHookOplusProxyBroadcast);
+        HookInstaller.install("setGmsRestricted", this::startHookSetGmsRestricted);
+        HookInstaller.install("isGoogleRestricInfoOn", this::startHookIsGoogleRestricInfoOn);
+        HookInstaller.install("isAppClassifyRestricted", this::startHookAppClassifyRestricted);
+        HookInstaller.install("isAllowStartFromBindService", this::startHookGcmBindService);
+        HookInstaller.install("isAllowStartFromStartService", this::startHookFcmStartService);
+        HookInstaller.install("isSysRestrictionCpn", this::startHookHansGmsRestriction);
+        HookInstaller.install("OAppNetControlService", this::startHookOAppNetControlService);
+        HookInstaller.install("HansSceneManager FCM window", this::startHookHansFcmWindow);
+        HookInstaller.install("HansCGroup FCM window", this::startHookHansCGroupFcmWindow);
+        HookInstaller.install("CpnProxy broadcast", this::startHookCpnProxyBroadcast);
+        HookInstaller.install("isGmsRestricted", this::startHookIsGmsRestricted);
+        HookInstaller.install("weak-signal net whitelist", this::startHookWeakSignalNetWhiteList);
+        HookInstaller.install("validStartProcessFromBroadcast", this::startHookValidStartFromBroadcast);
+        HookInstaller.install("malicious broadcast check", this::startHookMaliciousBroadcast);
+        HookInstaller.install("malicious service check", this::startHookMaliciousService);
+        HookInstaller.install("link-start broadcast check", this::startHookLinkStartBroadcast);
+        HookInstaller.install("Hans job FCM window", this::startHookHansJobWindow);
     }
 
     /**

@@ -9,12 +9,6 @@ import java.util.List;
 
 /** Restores only the Google entries omitted by the ColorOS CN regional Doze list. */
 public class OplusDeviceIdleFix extends XposedModule {
-    private static volatile boolean dozeInstalled, alarmInstalled, deepSleepAlarmInstalled;
-    public static boolean hasDozeHook() { return dozeInstalled; }
-    public static boolean hasAlarmHook() { return alarmInstalled; }
-
-    public static boolean hasDeepSleepAlarmHook() { return deepSleepAlarmInstalled; }
-
     private static final String OPLUS_DEVICE_IDLE_HELPER =
             "com.android.server.OplusDeviceIdleHelper";
     private static final String OPLUS_GOOGLE_ALARM_RESTRICT =
@@ -72,7 +66,6 @@ public class OplusDeviceIdleFix extends XposedModule {
                         param.setResult(null);
                     }
                 });
-        alarmInstalled = true;
         printLog("Oplus Google wakeup alarm protection active (always enabled)");
     }
 
@@ -97,7 +90,6 @@ public class OplusDeviceIdleFix extends XposedModule {
                         } catch (Throwable e) { logOnce("Unsupported deep-sleep alarm: " + e); }
                     }
                 });
-        deepSleepAlarmInstalled = true;
         printLog("Oplus deep-sleep wakeup alarm protection active (always enabled)");
     }
 
@@ -145,8 +137,7 @@ public class OplusDeviceIdleFix extends XposedModule {
             }
         }
         if (whitelistHooks == 0) throw new NoSuchMethodError("getNewWhiteList/whiteListChangedHandle");
-        dozeInstalled = boundaryHooks > 0;
-        if (!dozeInstalled) printLog("Doze boundary hook missing; only the inline-prone fallback is installed");
+        if (boundaryHooks == 0) printLog("Doze boundary hook missing; only the inline-prone fallback is installed");
         if (restrictSwitchHooks == 0) {
             printLog("OplusDeviceIdleHelper#getGoogleRestrictSwitch not found");
         }

@@ -8,8 +8,6 @@ import io.github.zopulus.ffc.util.DiagnosticLogger;
 import android.os.SystemClock;
 import io.github.zopulus.ffc.util.FcmTrust;
 import io.github.zopulus.ffc.util.OplusAttribution;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
 
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -19,23 +17,16 @@ import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
-import android.os.Bundle;
 import android.os.UserManager;
 import android.util.Log;
-
-
-
 
 import io.github.zopulus.ffc.libxposed.XC_MethodHook;
 import io.github.zopulus.ffc.libxposed.XposedBridge;
 import io.github.zopulus.ffc.libxposed.XposedHelpers;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
-
-import static android.content.Context.NOTIFICATION_SERVICE;
 
 public abstract class XposedModule {
     private static String selfPackageName = "UNKNOWN";
@@ -52,7 +43,7 @@ public abstract class XposedModule {
     @SuppressLint("StaticFieldLeak")
     protected static volatile Context context = null;
     private static final java.util.concurrent.CopyOnWriteArrayList<XposedModule> instances = new java.util.concurrent.CopyOnWriteArrayList<>();
-    private static boolean updateReceiverRegistered, uninstallReceiverRegistered;
+    private static boolean updateReceiverRegistered;
     public static volatile boolean isBootComplete = false;
     private static Thread loadConfigThread = null;
     private static volatile boolean bootInitThreadStarted = false;
@@ -261,10 +252,9 @@ public abstract class XposedModule {
                     reloadLatestConfig();
                     isBootComplete = true;
                     notifyConfigLoaded(previous);
-                    reportHookStatus();
                 } catch (Throwable e) {
                     printLog("Remote config failed: " + e.getMessage());
-                    try { loadConfigFromContentProvider(); isBootComplete = true; notifyConfigLoaded(previous); reportHookStatus(); }
+                    try { loadConfigFromContentProvider(); isBootComplete = true; notifyConfigLoaded(previous); }
                     catch (Throwable fallback) { printLog("Provider config failed: " + fallback.getMessage()); }
                 }
             }
@@ -278,55 +268,6 @@ public abstract class XposedModule {
         try { loadConfigFromRemotePreferences(); loaded = true; } catch (Throwable error) { failure = error; }
         try { loadConfigFromContentProvider(); loaded = true; } catch (Throwable error) { failure = error; }
         if (!loaded && failure != null) throw failure;
-    }
-
-    private static final java.util.concurrent.ScheduledExecutorService STATUS_REPORTER =
-            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread thread = new Thread(r, "FCMFix-status");
-                thread.setDaemon(true);
-                return thread;
-            });
-    protected static io.github.zopulus.ffc.util.RetryingTask retryingTask(
-            java.util.function.BooleanSupplier task, long... delays) {
-        return new io.github.zopulus.ffc.util.RetryingTask((action, delay) -> {
-            java.util.concurrent.ScheduledFuture<?> future = STATUS_REPORTER.schedule(
-                    action, delay, java.util.concurrent.TimeUnit.MILLISECONDS);
-            return () -> future.cancel(false);
-        }, task, delays);
-    }
-    private static final io.github.zopulus.ffc.util.RetryingTask STATUS_REPORT =
-            retryingTask(XposedModule::tryReportHookStatus, 1000, 3000, 10000, 30000);
-
-    protected static void reportHookStatus() { STATUS_REPORT.request(); }
-
-    private static boolean tryReportHookStatus() {
-        if (context == null) return false;
-        long identity = android.os.Binder.clearCallingIdentity();
-        try {
-            Bundle status = new Bundle();
-            status.putInt("version", io.github.zopulus.ffc.BuildConfig.VERSION_CODE);
-            status.putString("reporter", getSelfPackageName());
-            status.putBoolean("doze", OplusDeviceIdleFix.hasDozeHook());
-            status.putBoolean("alarm", OplusDeviceIdleFix.hasAlarmHook());
-            status.putBoolean("deepSleepAlarm", OplusDeviceIdleFix.hasDeepSleepAlarmHook());
-            status.putString("oplusProtections", HookRegistry.installedNames());
-            if ("android".equals(getSelfPackageName())) {
-                status.putBoolean("active", BroadcastFix.isInstalled());
-                status.putBoolean("networkFirewallGuarded", OplusGoogleNetworkFix.hasNetworkFirewallGuard());
-                status.putBoolean("nightWhitelist", OplusGoogleNetworkFix.hasNightWhitelistHook());
-            }
-            else {
-                status.putBoolean("deepSleep", OplusBatteryNetworkFix.hasDeepSleepHook());
-                status.putBoolean("network", OplusBatteryNetworkFix.hasNetworkHooks());
-                status.putString("networkPolicyState", OplusBatteryNetworkFix.networkPolicyState());
-                status.putString("networkPolicyDetail", OplusBatteryNetworkFix.networkPolicyDetail());
-            }
-            Bundle acknowledgement = context.getContentResolver().call(
-                    Uri.parse("content://" + SELF_PACKAGE_NAME + ".provider"), "recordHookStatus", null, status);
-            if (acknowledgement == null) throw new IllegalStateException("Hook status provider did not acknowledge");
-            return true;
-        } catch (Throwable error) { logOnce("Cannot report hook status; retry scheduled: " + error); return false; }
-        finally { android.os.Binder.restoreCallingIdentity(identity); }
     }
 
     private static void loadConfigFromRemotePreferences() {
@@ -383,14 +324,6 @@ public abstract class XposedModule {
         }
     }
 
-    private static void onUninstallFcmfix() {
-        NotificationManager notificationManager = (NotificationManager) context.getSystemService(NOTIFICATION_SERVICE);
-        NotificationChannel channel = notificationManager.getNotificationChannel("fcmfix");
-        if (channel != null) {
-            notificationManager.deleteNotificationChannel(channel.getId());
-        }
-    }
-
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private static synchronized boolean initReceiver() {
         if (context == null) return false;
@@ -401,7 +334,6 @@ public abstract class XposedModule {
                     public void onReceive(Context receiverContext, Intent intent) {
                         if (intent != null && (SELF_PACKAGE_NAME + ".update.config").equals(intent.getAction())) {
                             onUpdateConfig();
-                            printLog("BroadcastFix " + BroadcastFix.getHookStatus(), true);
                         }
                     }
                 };
@@ -411,24 +343,7 @@ public abstract class XposedModule {
                 updateReceiverRegistered = true;
             } catch (Throwable error) { printLog("Config receiver registration will retry: " + error); }
         }
-        if (!uninstallReceiverRegistered) {
-            try {
-                IntentFilter filter = new IntentFilter(Intent.ACTION_PACKAGE_REMOVED);
-                filter.addDataScheme("package");
-                context.registerReceiver(new BroadcastReceiver() {
-                    public void onReceive(Context receiverContext, Intent intent) {
-                        if (intent == null || intent.getData() == null || intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) return;
-                        if (Intent.ACTION_PACKAGE_REMOVED.equals(intent.getAction())
-                                && SELF_PACKAGE_NAME.equals(intent.getData().getSchemeSpecificPart())) {
-                            onUninstallFcmfix();
-                            printLog("Fcmfix已卸载，重启后停止生效。");
-                        }
-                    }
-                }, filter);
-                uninstallReceiverRegistered = true;
-            } catch (Throwable error) { printLog("Uninstall receiver registration will retry: " + error); }
-        }
-        return updateReceiverRegistered && uninstallReceiverRegistered;
+        return updateReceiverRegistered;
     }
 
     private static final Set<String> warnings = java.util.concurrent.ConcurrentHashMap.newKeySet();

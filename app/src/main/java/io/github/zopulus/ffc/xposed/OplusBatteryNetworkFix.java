@@ -6,6 +6,10 @@ import android.content.pm.ApplicationInfo;
 import android.os.Handler;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import io.github.zopulus.ffc.util.GoogleProtection;
 import io.github.zopulus.ffc.util.RetryingTask;
 import java.lang.reflect.Constructor;
@@ -24,12 +28,18 @@ import java.lang.reflect.Method;
  * Calls made directly by Settings/TrafficMonitor are outside this hook's process.
  */
 public class OplusBatteryNetworkFix extends XposedModule {
+    private static final ScheduledExecutorService RESTRICTION_RETRIES =
+            Executors.newSingleThreadScheduledExecutor(action -> {
+                Thread thread = new Thread(action, "FCMFix-network");
+                thread.setDaemon(true);
+                return thread;
+            });
     private volatile Object googleController;
-    private final RetryingTask verification =
-            retryingTask(this::tryReleaseExistingRestriction, 1000, 3000);
+    private final RetryingTask verification = new RetryingTask((action, delay) -> {
+        ScheduledFuture<?> future = RESTRICTION_RETRIES.schedule(action, delay, TimeUnit.MILLISECONDS);
+        return () -> future.cancel(false);
+    }, this::tryReleaseExistingRestriction, 1000, 3000);
     private static volatile String policyState = "pending", policyDetail = "Awaiting OEM policy verification";
-    public static String networkPolicyState() { return policyState; }
-    public static String networkPolicyDetail() { return policyDetail; }
 
     @Override protected void onConfigLoaded(io.github.zopulus.ffc.util.ConfigSnapshot previous,
             io.github.zopulus.ffc.util.ConfigSnapshot current) {
@@ -98,7 +108,6 @@ public class OplusBatteryNetworkFix extends XposedModule {
             policyState = "failed";
         } finally {
             printLog("Google OEM network verification: " + policyState + ": " + policyDetail, true);
-            reportHookStatus();
         }
         return !"failed".equals(policyState);
     }
@@ -120,10 +129,6 @@ public class OplusBatteryNetworkFix extends XposedModule {
             return false;
         }
     }
-
-    private static volatile boolean deepSleepInstalled, policyInstalled;
-    public static boolean hasDeepSleepHook() { return deepSleepInstalled; }
-    public static boolean hasNetworkHooks() { return policyInstalled; }
 
     private static final String NETWORK_CONTROL_MANAGER =
             ColorOs17Compat.NETWORK_MANAGER;
@@ -225,7 +230,6 @@ public class OplusBatteryNetworkFix extends XposedModule {
         if (hooks == 0) {
             throw new NoSuchMethodError(NETWORK_CONTROL_MANAGER + "#setUidPolicy(int,int)");
         }
-        policyInstalled = true;
     }
 
     private boolean isGoogleNetworkUid(int uid) {
@@ -289,7 +293,6 @@ public class OplusBatteryNetworkFix extends XposedModule {
                             }
                         }
                     });
-            deepSleepInstalled = true;
             printLog("Battery 睡眠待机优化豁免 Hook 已安装");
         } catch (Throwable e) {
             printLog("Battery 睡眠待机优化豁免 Hook 安装失败：" + e.getMessage());

@@ -14,13 +14,6 @@ import io.github.zopulus.ffc.util.IceboxUtils;
 import io.github.zopulus.ffc.util.FcmTrust;
 
 public class BroadcastFix extends XposedModule {
-    private static final java.util.Set<String> installed = java.util.concurrent.ConcurrentHashMap.newKeySet();
-    public static boolean isInstalled() {
-        return installed.stream().anyMatch(name -> name.startsWith("entry:"))
-                && installed.stream().anyMatch(name -> name.startsWith("locked:"));
-    }
-    public static String getHookStatus() { return "hooks=" + installed.size() + " " + installed; }
-
     public BroadcastFix(ClassLoader classLoader) {
         super(classLoader);
         try{
@@ -228,7 +221,6 @@ public class BroadcastFix extends XposedModule {
                 }
             }
         });
-        installed.add(stage + ":" + describeMethod(method));
     }
 
 }

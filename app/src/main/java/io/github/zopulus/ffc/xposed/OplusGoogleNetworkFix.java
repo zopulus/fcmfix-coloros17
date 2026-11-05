@@ -5,7 +5,6 @@ import android.content.pm.PackageManager;
 import io.github.zopulus.ffc.libxposed.XC_MethodHook;
 import io.github.zopulus.ffc.libxposed.XposedBridge;
 import io.github.zopulus.ffc.libxposed.XposedHelpers;
-import io.github.zopulus.ffc.util.ProtectionId;
 import java.lang.reflect.Method;
 
 /** System boundaries for Google networking and sleep restoration. */
@@ -21,10 +20,10 @@ public final class OplusGoogleNetworkFix extends XposedModule {
 
     public OplusGoogleNetworkFix(ClassLoader loader) {
         super(loader);
-        HookRegistry.install(ProtectionId.NIGHT_WHITELIST, this::startHookNightNetworkWhitelist);
-        HookRegistry.install(ProtectionId.GOOGLE_FIREWALL, this::startHookGoogleNetworkFirewall);
-        HookRegistry.install(ProtectionId.GOOGLE_RESTRICT_BROADCAST, this::startHookGoogleRestrictBroadcast);
-        HookRegistry.install(ProtectionId.GMS_FORCE_STOP, this::startHookDeepSleepGmsForceStop);
+        HookInstaller.install("night network whitelist", this::startHookNightNetworkWhitelist);
+        HookInstaller.install("Google network firewall", this::startHookGoogleNetworkFirewall);
+        HookInstaller.install("Google restrict broadcast", this::startHookGoogleRestrictBroadcast);
+        HookInstaller.install("deep-sleep GMS force-stop", this::startHookDeepSleepGmsForceStop);
     }
 
     /**
@@ -253,14 +252,6 @@ public final class OplusGoogleNetworkFix extends XposedModule {
     private static synchronized android.os.Handler reconnectHandler() {
         if (sReconnectHandler == null) sReconnectHandler = new android.os.Handler(android.os.Looper.getMainLooper());
         return sReconnectHandler;
-    }
-
-    public static boolean hasNetworkFirewallGuard() {
-        return HookRegistry.contains(ProtectionId.GOOGLE_FIREWALL)
-                && OplusBatteryNetworkFix.batteryIgnoresGmsUserSet();
-    }
-    public static boolean hasNightWhitelistHook() {
-        return HookRegistry.contains(ProtectionId.NIGHT_WHITELIST);
     }
 
     private static boolean isBooleanType(Class<?> type) { return type == boolean.class || type == Boolean.class; }
