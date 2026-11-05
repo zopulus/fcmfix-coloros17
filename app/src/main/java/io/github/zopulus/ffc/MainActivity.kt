@@ -31,13 +31,16 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import io.github.zopulus.ffc.ui.FcmfixApp
 import io.github.zopulus.ffc.ui.FcmfixTheme
 import io.github.zopulus.ffc.util.IceboxUtils
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -84,21 +87,39 @@ data class FcmfixUiState(
 )
 
 /** Optimistic configuration survives Activity recreation while the save queue drains. */
-private object ConfigMemory {
+private object ConfigMemory : XposedServiceHelper.OnServiceListener {
     var latestRevision = 0L
     var editGeneration = 0L
     var initialized = false
-    @Volatile var xposedService: XposedService? = null
+    val connection = MutableStateFlow<XposedService?>(null)
+    private var listenerRegistered = false
     val state = androidx.compose.runtime.mutableStateOf(FcmfixUiState())
+
+    fun bindXposedService() {
+        if (listenerRegistered) return
+        try {
+            XposedServiceHelper.registerListener(this)
+            listenerRegistered = true
+        } catch (error: Throwable) {
+            Log.e(TAG, "Could not connect to the Xposed service", error)
+        }
+    }
+
+    override fun onServiceBind(service: XposedService) {
+        connection.value = service
+    }
+
+    override fun onServiceDied(service: XposedService) {
+        connection.compareAndSet(service, null)
+    }
 }
 
 class MainActivity : ComponentActivity() {
     private val configObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean) { loadConfigFromAvailableSource() }
     }
-    private var xposedService: XposedService?
-        get() = ConfigMemory.xposedService
-        set(value) { ConfigMemory.xposedService = value }
+    private val xposedService: XposedService?
+        get() = ConfigMemory.connection.value
     private var latestRevision: Long
         get() = ConfigMemory.latestRevision
         set(value) { ConfigMemory.latestRevision = value }
@@ -136,7 +157,15 @@ class MainActivity : ComponentActivity() {
         initializeDefaultConfigIfNeeded()
         contentResolver.registerContentObserver(Uri.parse("content://$packageName.provider/config"), false, configObserver)
         if (uiState.value.config.includeIceBoxDisabledApps) requestIceBoxPermissionIfNeeded()
-        bindXposedService()
+        ConfigMemory.bindXposedService()
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                ConfigMemory.connection.collect { service ->
+                    uiState.value = uiState.value.copy(xposedConnected = service != null)
+                    loadConfigFromAvailableSource()
+                }
+            }
+        }
 
         setContent {
             FcmfixTheme {
@@ -159,8 +188,6 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         launcherIconHidden.value = packageManager.getComponentEnabledSetting(launcherAliasComponent) ==
             PackageManager.COMPONENT_ENABLED_STATE_DISABLED
-        uiState.value = uiState.value.copy(xposedConnected = xposedService != null)
-        loadConfigFromAvailableSource()
         loadInstalledApps()
     }
 
@@ -197,31 +224,6 @@ class MainActivity : ComponentActivity() {
             }
         } catch (error: Throwable) {
             Log.w(TAG, "Icebox permission request unavailable", error)
-        }
-    }
-
-    private fun bindXposedService() {
-        try {
-            XposedServiceHelper.registerListener(object : XposedServiceHelper.OnServiceListener {
-                override fun onServiceBind(service: XposedService) {
-                    xposedService = service
-                    runOnUiThread {
-                        uiState.value = uiState.value.copy(xposedConnected = xposedService != null)
-                        loadConfigFromAvailableSource()
-                    }
-                }
-
-                override fun onServiceDied(service: XposedService) {
-                    if (xposedService === service) {
-                        xposedService = null
-                        runOnUiThread {
-                            uiState.value = uiState.value.copy(xposedConnected = xposedService != null)
-                        }
-                    }
-                }
-            })
-        } catch (error: Throwable) {
-            Log.e(TAG, "Could not connect to the Xposed service", error)
         }
     }
 
