@@ -1,9 +1,13 @@
 <resources>
-    <!-- Base application theme. -->
-    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
-        <!-- Customize your theme here. -->
-        <item name="android:colorAccent">@color/colorAccent</item>
+    <style name="AppTheme" parent="@style/PlatformWindowTheme">
+        <item name="android:colorAccent">@color/window_accent</item>
+        <item name="android:windowBackground">@color/window_background</item>
         <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:forceDarkAllowed">false</item>
     </style>
 
+    <style name="PlatformWindowTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
 </resources>

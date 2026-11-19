@@ -43,7 +43,6 @@ public class BroadcastFix extends XposedModule {
                 "com.android.server.am.ActivityManagerService",
                 "com.android.server.am.BroadcastController"
         };
-        Set<String> hookedSignatures = new HashSet<>();
         int hookCount = 0;
 
         for (String className : candidateClasses) {
@@ -59,15 +58,11 @@ public class BroadcastFix extends XposedModule {
                 if (intentArgsIndex < 0) {
                     continue;
                 }
-                String signature = describeMethod(method);
-                if (!hookedSignatures.add(signature)) {
-                    continue;
-                }
                 try {
                     createBroadcastIntentHooker(intentArgsIndex, method, "entry");
                     hookCount++;
                 } catch (Throwable e) {
-                    printLog("hook broadcast entry failed: " + signature + ": " + e.getMessage());
+                    printLog("hook broadcast entry failed: " + describeMethod(method) + ": " + e.getMessage());
                 }
             }
             // AMS delegates to BroadcastController; do not install a second entry there.
@@ -81,7 +76,6 @@ public class BroadcastFix extends XposedModule {
                 "com.android.server.am.BroadcastController",
                 "com.android.server.am.ActivityManagerService"
         };
-        Set<String> hookedSignatures = new HashSet<>();
         int hookCount = 0;
 
         for (String className : candidateClasses) {
@@ -104,16 +98,11 @@ public class BroadcastFix extends XposedModule {
                     continue;
                 }
 
-                String signature = describeMethod(method);
-                if (!hookedSignatures.add(signature)) {
-                    continue;
-                }
-
                 try {
                     createBroadcastIntentHooker(intentArgsIndex, method, "locked");
                     hookCount++;
                 } catch (Throwable e) {
-                    printLog("hook broadcast candidate failed: " + signature + ": " + e.getMessage());
+                    printLog("hook broadcast candidate failed: " + describeMethod(method) + ": " + e.getMessage());
                 }
             }
         }

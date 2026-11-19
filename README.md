@@ -18,6 +18,4 @@
 
 基于 [Artifical0/fcmfix-coloros](https://github.com/Artifical0/fcmfix-coloros)，源自 [kooritea/fcmfix](https://github.com/kooritea/fcmfix)。
 
-界面参考 [KernelSU](https://github.com/tiann/KernelSU) 与 [LSPosed](https://github.com/LSPosed/LSPosed)。
-
-图标使用 Google Material Symbols 和 Firebase 标识。Material Symbols 的 Apache 2.0 许可证保留在 `app/src/main/assets/licenses/`。
+UI 参考 [KernelSU](https://github.com/tiann/KernelSU)、[LSPosed](https://github.com/LSPosed/LSPosed) 和 [COUI](https://github.com/suqi8/coui)。

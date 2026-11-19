@@ -1,5 +1,6 @@
 apply plugin: 'com.android.application'
 apply plugin: 'org.jetbrains.kotlin.plugin.compose'
+apply plugin: 'org.jetbrains.kotlin.plugin.serialization'
 
 android {
     namespace = "io.github.zopulus.ffc"
@@ -10,8 +11,8 @@ android {
         // ClassValue requires API 34; this fork supports ColorOS17 only.
         minSdkVersion 34
         targetSdkVersion 34
-        versionCode 94
-        versionName "2026110501"
+        versionCode 95
+        versionName "2026111901"
 
         ndk {
             abiFilters "arm64-v8a"
@@ -28,8 +29,9 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
+        // COUI navigation exposes inline APIs compiled for Java 21.
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
     }
     buildFeatures {
         compose true
@@ -38,6 +40,13 @@ android {
 }
 
 dependencies {
+    implementation 'io.github.suqi8.coui.kmp:coui-ui-android:2.0.0'
+    implementation 'io.github.suqi8.coui.kmp:coui-preference-android:2.0.0'
+    implementation 'io.github.suqi8.coui.kmp:coui-blur-android:2.0.0'
+    implementation 'io.github.suqi8.coui.kmp:coui-icons-android:2.0.0'
+    implementation 'io.github.suqi8.coui.kmp:coui-squircle-android:2.0.0'
+    implementation 'io.github.suqi8.coui.kmp:coui-nav-android:2.0.0'
+    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0'
     testImplementation 'junit:junit:4.13.2'
     // Android-compatible org.json implementation for JVM tests; the SDK jar contains stubs.
     testImplementation 'com.vaadin.external.google:android-json:0.0.20131108.vaadin1'

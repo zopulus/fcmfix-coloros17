@@ -39,12 +39,7 @@ public class KeepNotification extends XposedModule{
                     if(!isBootComplete){
                         return;
                     }
-                    if (param.args.length <= Math.max(finalPkg_args_index, finalReason_args_index)
-                            || !(param.args[finalPkg_args_index] instanceof String)
-                            || !(param.args[finalReason_args_index] instanceof Integer)) {
-                        printLog("Unsupported cancelAllNotificationsInt arguments");
-                        return;
-                    }
+                    if (param.args[finalPkg_args_index] == null) return;
                     if(getBooleanConfig("disableAutoCleanNotification",false) && targetIsAllow((String) param.args[finalPkg_args_index])){
                         int reason = (int)param.args[finalReason_args_index];
                         if(reason == NotificationListenerService.REASON_PACKAGE_CHANGED){

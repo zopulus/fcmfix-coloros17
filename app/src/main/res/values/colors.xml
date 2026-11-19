@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="colorAccent">#03DAC5</color>
+    <!-- Match the default COUI palette before Compose draws the first frame. -->
+    <color name="window_accent">#0080FF</color>
+    <color name="window_background">#F0F1F2</color>
 </resources>

@@ -3,14 +3,10 @@ package io.github.zopulus.ffc.ui
 import android.os.Build
 import android.system.Os
 import android.system.OsConstants
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -48,10 +45,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.rounded.CheckCircle
-import androidx.compose.material.icons.outlined.Done
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Warning
@@ -90,6 +85,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -99,23 +96,26 @@ import androidx.compose.ui.res.vectorResource
 import io.github.zopulus.ffc.R
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.round
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.res.stringResource
 import kotlinx.coroutines.launch
 import io.github.zopulus.ffc.FcmfixConfig
 import io.github.zopulus.ffc.FcmfixUiState
 import io.github.zopulus.ffc.InstalledApp
 
-private enum class MainTab(val label: String, val appBarTitle: String = label) {
-    HOME("主页", "Fcmfix"),
-    APPS("应用"),
-    SETTINGS("设置")
-}
-
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun FcmfixApp(
+internal fun FcmfixApp(
+    initialTab: MainTab,
+    style: InterfaceStyle,
+    onTabChange: (MainTab) -> Unit,
+    onStyleChange: (InterfaceStyle) -> Unit,
     state: FcmfixUiState,
     apps: List<InstalledApp>,
     versionName: String,
@@ -126,9 +126,10 @@ fun FcmfixApp(
     onOpenProject: () -> Unit,
     onReloadApps: () -> Unit
 ) {
-    val pagerState = rememberPagerState(pageCount = { MainTab.entries.size })
+    val pagerState = rememberPagerState(initialPage = initialTab.ordinal, pageCount = { MainTab.entries.size })
     val coroutineScope = rememberCoroutineScope()
     val selectedTab = MainTab.entries[pagerState.currentPage]
+    LaunchedEffect(pagerState.settledPage) { onTabChange(MainTab.entries[pagerState.settledPage]) }
     var appFilter by rememberSaveable { mutableStateOf(AppFilter.ALL) }
     val appListSession = remember(pagerState.settledPage) { AppListSession() }
     val onAppConfigChange: (FcmfixConfig) -> Unit = {
@@ -170,10 +171,10 @@ fun FcmfixApp(
                         icon = {
                             Icon(
                                 if (selectedTab == tab) selectedIcon else unselectedIcon,
-                                contentDescription = tab.label
+                                contentDescription = stringResource(tab.title)
                             )
                         },
-                        label = { Text(tab.label) }
+                        label = { Text(stringResource(tab.title)) }
                     )
                 }
             }
@@ -209,7 +210,8 @@ fun FcmfixApp(
                             }
                         } else {
                             Text(
-                                MainTab.entries[page].appBarTitle,
+                                if (MainTab.entries[page] == MainTab.HOME) "Fcmfix"
+                                else stringResource(MainTab.entries[page].title),
                                 modifier = Modifier.padding(start = 4.dp),
                                 style = titleStyle
                             )
@@ -268,6 +270,8 @@ fun FcmfixApp(
                 )
                 MainTab.SETTINGS -> SettingsScreen(
                     modifier = pageModifier,
+                    style = style,
+                    onStyleChange = onStyleChange,
                     state = state,
                     launcherIconHidden = launcherIconHidden,
                     onConfigChange = onConfigChange,
@@ -504,12 +508,13 @@ private fun AppListActions(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
+    val allAllowed = apps.isNotEmpty() && apps.all { it.packageName in state.config.allowedPackages }
     Box {
         IconButton(onClick = {
             haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
             expanded = true
         }) {
-            Icon(ImageVector.vectorResource(R.drawable.ic_more_vert), contentDescription = "应用筛选与全选")
+            Icon(ImageVector.vectorResource(R.drawable.ic_more_vert), contentDescription = stringResource(R.string.apps_options))
         }
         DropdownMenuPopup(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuGroup(
@@ -520,7 +525,7 @@ private fun AppListActions(
                     SelectableDropdownMenuItem(
                         selected = selectedFilter == filter,
                         shapes = MenuDefaults.itemShape(index, AppFilter.entries.size),
-                        text = { Text(filter.title) },
+                        text = { Text(appFilterLabel(filter)) },
                         selectedLeadingIcon = { Icon(Icons.Filled.Check, contentDescription = null) },
                         onClick = {
                             haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
@@ -537,17 +542,16 @@ private fun AppListActions(
             ) {
                 SelectableDropdownMenuItem(
                     shapes = MenuDefaults.itemShape(index = 0, count = 1),
-                    selected = apps.isNotEmpty() && apps.all { it.packageName in state.config.allowedPackages },
-                    text = { Text("全选") },
-                    enabled = !state.appsLoading && !state.appsLoadFailed && apps.isNotEmpty(),
+                    selected = allAllowed,
+                    text = { Text(stringResource(R.string.apps_allow_all)) },
+                    enabled = !state.appsLoading && !state.appsLoadFailed && apps.isNotEmpty() && !allAllowed,
                     selectedLeadingIcon = {
                         Icon(Icons.Filled.Check, contentDescription = null,
                             modifier = Modifier.size(MenuDefaults.LeadingIconSize))
                     },
                     onClick = {
                         haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
-                        val detected = apps.mapTo(mutableSetOf(), InstalledApp::packageName)
-                        onConfigChange(state.config.copy(allowedPackages = state.config.allowedPackages + detected))
+                        onConfigChange(state.config.allowApps(apps))
                         expanded = false
                     }
                 )
@@ -569,21 +573,8 @@ private fun AppsScreen(
     var query by rememberSaveable { mutableStateOf("") }
     val allowed = state.config.allowedPackages
     val allowedFcmCount = apps.count { it.packageName in allowed }
-    val snapshots = session.snapshots(allowed, selectedFilter)
-    val visit = snapshots.order
-    val filterSnapshot = snapshots.filter
-    val orderedApps = remember(apps, visit) {
-        visit.grouped(apps, InstalledApp::packageName)
-    }
-    val visibleApps = remember(orderedApps, query, selectedFilter, filterSnapshot) {
-        orderedApps.asSequence()
-            .filter { filterSnapshot.includes(it.packageName, selectedFilter) }
-            .filter { app ->
-                query.isBlank() || app.label.contains(query, ignoreCase = true) ||
-                    app.packageName.contains(query, ignoreCase = true)
-            }
-            .toList()
-    }
+    val filtered = visibleApps(apps, session, allowed, selectedFilter)
+    val visibleApps = remember(filtered, query) { filtered.searchApps(query) }
 
     Column(modifier = modifier.padding(horizontal = 16.dp)) {
         Column(
@@ -596,12 +587,16 @@ private fun AppsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                placeholder = { Text("搜索应用名称或包名") },
+                placeholder = { Text(stringResource(R.string.apps_search)) },
                 shape = MaterialTheme.shapes.extraLarge
             )
 
             Text(
-                "$allowedFcmCount / ${apps.size} 个已开启" + if (state.appsLoading) " · 刷新中" else "",
+                stringResource(
+                    if (state.appsLoading) R.string.apps_count_refresh else R.string.apps_count,
+                    allowedFcmCount,
+                    apps.size,
+                ),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -609,34 +604,26 @@ private fun AppsScreen(
         }
 
         if (state.appsLoadFailed && apps.isNotEmpty()) {
-            TextButton(onClick = onReloadApps) { Text("刷新失败，点击重试") }
+            TextButton(onClick = onReloadApps) { Text(stringResource(R.string.apps_retry)) }
         }
 
         when {
             state.appsLoading && apps.isEmpty() -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
-            state.appsLoadFailed && apps.isEmpty() -> EmptyAppsState(
-                title = "无法读取 FCM 应用",
-                message = "请检查应用列表权限后重试。",
-                onReload = onReloadApps
-            )
-            visibleApps.isEmpty() -> EmptyAppsState(
-                title = when {
-                    query.isNotBlank() -> "没有搜索结果"
-                    selectedFilter == AppFilter.ALLOWED -> "暂无已开启的 FCM 应用"
-                    selectedFilter == AppFilter.DISABLED -> "暂无已关闭的 FCM 应用"
-                    else -> "未检测到 FCM 应用"
-                },
-                message = when {
-                    query.isNotBlank() -> "检查应用名称或包名是否正确。"
-                    selectedFilter == AppFilter.ALLOWED -> "在列表中开启应用开关以允许 FCM 唤醒。"
-                    selectedFilter == AppFilter.DISABLED -> "当前 FCM 应用均已开启。"
-                    else -> "列表只显示包含 Firebase Cloud Messaging 接收器的应用。"
-                },
-                onReload = onReloadApps,
-                showButton = query.isBlank() && selectedFilter == AppFilter.ALL
-            )
+            visibleApps.isEmpty() -> {
+                val empty = emptyAppsMessage(
+                    loadFailed = state.appsLoadFailed && apps.isEmpty(),
+                    hasQuery = query.isNotBlank(),
+                    filter = selectedFilter,
+                )
+                EmptyAppsState(
+                    title = stringResource(empty.title),
+                    message = stringResource(empty.hint),
+                    onReload = onReloadApps,
+                    showButton = empty.canReload,
+                )
+            }
             else -> LazyColumn(
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp),
@@ -649,8 +636,7 @@ private fun AppsScreen(
                         index = index,
                         count = visibleApps.size,
                         onAllowedChange = { enabled ->
-                            val next = if (enabled) allowed + app.packageName else allowed - app.packageName
-                            onConfigChange(state.config.copy(allowedPackages = next))
+                            onConfigChange(state.config.setAppAllowed(app.packageName, enabled))
                         }
                     )
                 }
@@ -732,162 +718,126 @@ private fun AppRow(
 @Composable
 private fun SettingsScreen(
     modifier: Modifier,
+    style: InterfaceStyle,
     state: FcmfixUiState,
     launcherIconHidden: Boolean,
+    onStyleChange: (InterfaceStyle) -> Unit,
     onConfigChange: (FcmfixConfig) -> Unit,
     onLauncherIconHiddenChange: (Boolean) -> Unit
 ) {
-    val config = state.config
-    var showRootWarning by rememberSaveable { mutableStateOf(false) }
-    var showHideLauncherIconWarning by rememberSaveable { mutableStateOf(false) }
-
-    if (showRootWarning) {
+    var confirmation by rememberSaveable { mutableStateOf<SettingConfirmation?>(null) }
+    confirmation?.let { request ->
         AlertDialog(
-            onDismissRequest = { showRootWarning = false },
-            icon = { Icon(Icons.Outlined.Warning, contentDescription = null) },
-            title = { Text("开启 Root 联网白名单？") },
-            text = {
-                Text("UID 0 可能包含所有以 Root 身份运行的进程。开启后，这些进程都会进入 ColorOS 睡眠待机优化白名单。")
-            },
+            onDismissRequest = { confirmation = null },
+            icon = if (request == SettingConfirmation.ROOT) {
+                { Icon(Icons.Outlined.Warning, contentDescription = null) }
+            } else null,
+            title = { Text(stringResource(request.title)) },
+            text = { Text(stringResource(request.message)) },
             confirmButton = {
                 TextButton(onClick = {
-                    showRootWarning = false
-                    if (config.deepSleepGoogleWhitelist) onConfigChange(config.copy(rootDeepSleepNetworkWhitelist = true))
-                }) { Text("开启") }
+                    confirmation = null
+                    request.confirm(state.config, onConfigChange, onLauncherIconHiddenChange)
+                }) { Text(stringResource(request.action)) }
             },
             dismissButton = {
-                TextButton(onClick = { showRootWarning = false }) { Text("取消") }
+                TextButton(onClick = { confirmation = null }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
     }
 
-    if (showHideLauncherIconWarning) {
-        AlertDialog(
-            onDismissRequest = { showHideLauncherIconWarning = false },
-            title = { Text("隐藏桌面图标？") },
-            text = {
-                Text(
-                    "隐藏后，可从 LSPosed 模块页面打开 fcmfix，在设置中关闭此选项即可恢复桌面图标"
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    showHideLauncherIconWarning = false
-                    onLauncherIconHiddenChange(true)
-                }) { Text("隐藏") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showHideLauncherIconWarning = false }) { Text("取消") }
-            }
-        )
+    val groups = settingsGroups(state.config, launcherIconHidden, onConfigChange, onLauncherIconHiddenChange) {
+        confirmation = it
     }
-
     LazyColumn(
         modifier = modifier,
         contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
-        item {
-            SettingsGroup(
-                title = "ColorOS 联网保护",
-                items = listOf(
-                    SettingEntry(
-                        icon = ImageVector.vectorResource(R.drawable.ic_bedtime),
-                        title = "睡眠待机优化白名单",
-                        summary = "将 GMS 和 GSF 加入联网白名单",
-                        checked = config.deepSleepGoogleWhitelist,
-                        onCheckedChange = { enabled ->
-                            onConfigChange(config.copy(
-                                deepSleepGoogleWhitelist = enabled,
-                                rootDeepSleepNetworkWhitelist = enabled && config.rootDeepSleepNetworkWhitelist
-                            ))
-                        }
-                    ),
-                    SettingEntry(
-                        icon = ImageVector.vectorResource(R.drawable.ic_terminal),
-                        title = "待机优化白名单 UID 0",
-                        summary = if (config.deepSleepGoogleWhitelist) "将 Root 下所有进程加入联网白名单" else "请先开启睡眠待机优化白名单",
-                        checked = config.deepSleepGoogleWhitelist && config.rootDeepSleepNetworkWhitelist,
-                        enabled = config.deepSleepGoogleWhitelist,
-                        onCheckedChange = { enabled ->
-                            if (enabled) showRootWarning = true
-                            else onConfigChange(config.copy(rootDeepSleepNetworkWhitelist = false))
-                        }
-                    ),
-                    SettingEntry(
-                        icon = ImageVector.vectorResource(R.drawable.ic_hourglass),
-                        title = "Doze 待机优化白名单",
-                        summary = "将 GMS 和 GSF 加入待机优化白名单",
-                        checked = config.dozeGoogleWhitelist,
-                        onCheckedChange = { enabled ->
-                            onConfigChange(config.copy(dozeGoogleWhitelist = enabled))
-                        }
-                    )
-                )
-            )
-        }
-
-        item {
-            SettingsGroup(
-                title = "应用唤醒与通知",
-                items = listOf(
-                    SettingEntry(
-                        icon = ImageVector.vectorResource(R.drawable.ic_shield),
-                        title = "自动放行新应用",
-                        summary = "新安装的FCM应用默认开启",
-                        checked = config.autoAllowNewApps,
-                        onCheckedChange = { onConfigChange(config.copy(autoAllowNewApps = it)) }
-                    ),
-                    SettingEntry(
-                        icon = ImageVector.vectorResource(R.drawable.ic_notifications_active),
-                        title = "保留应用停止前的通知",
-                        summary = "应用停止时保留它已有的通知",
-                        checked = config.disableAutoCleanNotification,
-                        onCheckedChange = { onConfigChange(config.copy(disableAutoCleanNotification = it)) }
-                    ),
-                    SettingEntry(
-                        icon = ImageVector.vectorResource(R.drawable.ic_ac_unit),
-                        title = "允许唤醒冻结的应用",
-                        summary = "FCM 到达时尝试解除冻结状态",
-                        checked = config.includeIceBoxDisabledApps,
-                        onCheckedChange = { onConfigChange(config.copy(includeIceBoxDisabledApps = it)) }
-                    )
-                )
-            )
-        }
-
-        item {
-            SettingsGroup(
-                title = "其他设置",
-                items = listOf(
-                    SettingEntry(
-                        icon = ImageVector.vectorResource(R.drawable.ic_visibility_off),
-                        title = "隐藏桌面图标",
-                        summary = "隐藏启动器中的 fcmfix 图标，不影响模块运行",
-                        checked = launcherIconHidden,
-                        onCheckedChange = { hidden ->
-                            if (hidden) showHideLauncherIconWarning = true
-                            else onLauncherIconHiddenChange(false)
-                        }
-                    )
-                )
-            )
+        items(groups) { group ->
+            SettingsSection(stringResource(group.title)) {
+                val styleOffset = if (group.includeInterfaceStyle) 1 else 0
+                val rowCount = group.items.size + styleOffset
+                if (group.includeInterfaceStyle) {
+                    MaterialStylePreference(style, onStyleChange, index = 0, count = rowCount)
+                }
+                group.items.forEachIndexed { index, item ->
+                    key(item.title) { SettingRow(item, index + styleOffset, rowCount) }
+                }
+            }
         }
     }
 }
 
-private data class SettingEntry(
-    val icon: ImageVector,
-    val title: String,
-    val summary: String,
-    val checked: Boolean,
-    val onCheckedChange: (Boolean) -> Unit,
-    val enabled: Boolean = true
-)
-
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+// Adapted from the interface mode row in KernelSU's Material settings.
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun SettingsGroup(title: String, items: List<SettingEntry>) {
+private fun MaterialStylePreference(
+    style: InterfaceStyle,
+    onStyleChange: (InterfaceStyle) -> Unit,
+    index: Int,
+    count: Int,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var pressPosition by remember { mutableStateOf<IntOffset?>(null) }
+    var menuAnchor by remember { mutableStateOf<IntOffset?>(null) }
+    val haptics = LocalHapticFeedback.current
+    Box(Modifier.pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            pressPosition = down.position.round()
+            waitForUpOrCancellation()
+            pressPosition = null
+        }
+    }) {
+        SegmentedListItem(
+            onClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
+                menuAnchor = pressPosition
+                expanded = true
+            },
+            verticalAlignment = Alignment.CenterVertically,
+            shapes = ListItemDefaults.segmentedShapes(index, count),
+            colors = expressiveSegmentedColors(),
+            leadingContent = { Icon(ImageVector.vectorResource(R.drawable.ic_display_settings), null) },
+            supportingContent = { Text(stringResource(R.string.settings_style_hint)) },
+            trailingContent = {
+                Text(
+                    stringResource(style.title),
+                    modifier = Modifier.fillMaxWidth(0.3f),
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.End
+                )
+            }
+        ) { Text(stringResource(R.string.settings_style)) }
+        // Popup anchors to its immediate layout parent. Keep that parent at the press point.
+        val anchor = menuAnchor
+        val anchorModifier = if (anchor == null) Modifier.align(Alignment.BottomEnd)
+        else Modifier.align(AbsoluteAlignment.TopLeft).absoluteOffset { anchor }
+        Box(anchorModifier) {
+            DropdownMenuPopup(expanded = expanded, onDismissRequest = { expanded = false }) {
+                DropdownMenuGroup(shapes = MenuDefaults.groupShape(index = 0, count = 1)) {
+                    InterfaceStyle.entries.forEachIndexed { index, option ->
+                        SelectableDropdownMenuItem(
+                            selected = option == style,
+                            shapes = MenuDefaults.itemShape(index, InterfaceStyle.entries.size),
+                            text = { Text(stringResource(option.title)) },
+                            selectedLeadingIcon = { Icon(Icons.Filled.Check, contentDescription = null) },
+                            onClick = {
+                                haptics.performHapticFeedback(HapticFeedbackType.VirtualKey)
+                                expanded = false
+                                if (option != style) onStyleChange(option)
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsSection(title: String, content: @Composable () -> Unit) {
     Column {
         Text(
             title,
@@ -895,13 +845,7 @@ private fun SettingsGroup(title: String, items: List<SettingEntry>) {
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.primary
         )
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            items.forEachIndexed { index, item ->
-                key(item.title) {
-                    SettingRow(item = item, index = index, count = items.size)
-                }
-            }
-        }
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) { content() }
     }
 }
 
@@ -924,13 +868,13 @@ private fun SettingRow(item: SettingEntry, index: Int, count: Int, modifier: Mod
         colors = expressiveSegmentedColors(),
         leadingContent = {
             Icon(
-                item.icon,
+                ImageVector.vectorResource(item.icon),
                 contentDescription = null,
                 tint = if (item.enabled) MaterialTheme.colorScheme.onSurfaceVariant
                     else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
             )
         },
-        supportingContent = { Text(item.summary, color = if (item.enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)) },
+        supportingContent = { Text(stringResource(item.summary), color = if (item.enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)) },
         trailingContent = {
             Switch(
                 checked = item.checked,
@@ -946,6 +890,6 @@ private fun SettingRow(item: SettingEntry, index: Int, count: Int, modifier: Mod
                 }
             )
         },
-        content = { Text(item.title, color = if (item.enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)) }
+        content = { Text(stringResource(item.title), color = if (item.enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)) }
     )
 }

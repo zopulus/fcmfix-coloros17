@@ -419,7 +419,7 @@ public abstract class XposedModule {
                     String[] packages = context.getPackageManager().getPackagesForUid(callerUid);
                     boolean gms = isGmsUid(callerUid, packages);
                     boolean selfInWindow = !gms && packages != null && java.util.Arrays.asList(packages).contains(target)
-                            && OplusProxyFix.isInFcmDeliveryWindow(callerUid);
+                            && OplusProxyFix.isInFcmDeliveryWindow(callerUid, target);
                     boolean gcmBind = "isAllowStartFromBindService".equals(methodName)
                             && "bsgcm".equals(param.args[5]);
                     boolean trusted = FcmTrust.allowsService(intent.getAction(), gms, selfInWindow, gcmBind);

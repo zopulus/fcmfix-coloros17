@@ -4,6 +4,26 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class FcmDeliveryWindowTest {
+    @Test public void sharedUidCannotBorrowAnotherPackagesServiceWindow() {
+        FcmDeliveryWindow window = new FcmDeliveryWindow();
+        window.begin(10001, "app.a", 100);
+        assertTrue(FcmTrust.allowsService("com.google.firebase.MESSAGING_EVENT", false,
+                window.contains(10001, "app.a", 101), false));
+        assertFalse(FcmTrust.allowsService("com.google.firebase.MESSAGING_EVENT", false,
+                window.contains(10001, "app.b", 101), false));
+    }
+
+    @Test public void targetWindowChecksUidExpiryAndLatestPackageTogether() {
+        FcmDeliveryWindow window = new FcmDeliveryWindow();
+        window.begin(10001, "app.a", 100);
+        assertFalse(window.contains(10002, "app.a", 101));
+        assertFalse(window.contains(10001, null, 101));
+        window.begin(10001, "app.b", 200);
+        assertFalse(window.contains(10001, "app.a", 201));
+        assertTrue(window.contains(10001, "app.b", 20199));
+        assertFalse(window.contains(10001, "app.b", 20200));
+    }
+
     @Test public void invalidUidCannotCreateWindow() {
         FcmDeliveryWindow window = new FcmDeliveryWindow();
         window.begin(-1, "target", 100);

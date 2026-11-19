@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Static final success frame from COUI CompleteState, cropped to the status icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="240"
+    android:viewportHeight="240">
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="15"
+        android:pathData="M120,18a102,102 0,1 1,0 204a102,102 0,1 1,0 -204z" />
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="15"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M164.94,89.45L104.70,149.70L74.54,119.49" />
+</vector>

@@ -121,7 +121,7 @@ public class OplusProxyFix extends XposedModule {
                     String jobPackage = job == null || job.getService() == null ? null
                             : job.getService().getPackageName();
                     if (isConfigurationReady() && FcmTrust.allowsJob(target, requested, jobPackage,
-                            targetIsAllow(target), isInFcmDeliveryWindow(uid))
+                            targetIsAllow(target), isInFcmDeliveryWindow(uid, target))
                             && getTargetUidFromPackageName(target) == uid) {
                         unfreeze(target, uid);
                         printLog("Oplus FCM job-restriction bypass: pkg=" + target + ", uid=" + uid, true);
@@ -159,15 +159,17 @@ public class OplusProxyFix extends XposedModule {
                     "com.android.server.am.BroadcastRecord")) continue;
             if ("handleProcessBroadcastStartLocked".equals(methodName) && !signature(method,
                     "com.android.server.am.BroadcastRecord", "android.content.pm.ResolveInfo")) continue;
-            boolean hasRecord = false;
-            for (Class<?> type : method.getParameterTypes()) {
-                if ("com.android.server.am.BroadcastRecord".equals(type.getName())) hasRecord = true;
-            }
-            if (!hasRecord) continue;
+            final int recordIndex = switch (methodName) {
+                case "validStartProcessFromBroadcast" -> 1;
+                case "shouldPreventBroadcastByMaliciousCheck" -> 2;
+                default -> 0;
+            };
             XposedBridge.hookMethod(method, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
-                    Intent intent = findIntentArgument(param.args);
+                    Object record = param.args[recordIndex];
+                    if (record == null) return;
+                    Intent intent = (Intent) XposedHelpers.getObjectField(record, "intent");
                     if (intent == null || !FcmTrust.RECEIVE.equals(intent.getAction())) return;
                     String target;
                     try {
@@ -262,8 +264,7 @@ public class OplusProxyFix extends XposedModule {
                         String callerPackage = ((ApplicationInfo) callerInfo).packageName;
                         boolean gms = "com.google.android.gms".equals(callerPackage) && isGmsUid(callerUid);
                         boolean selfInWindow = target.equals(callerPackage) && callerUid == appInfo.uid
-                                && target.equals(getFcmDeliveryPackage(callerUid))
-                                && isInFcmDeliveryWindow(callerUid);
+                                && isInFcmDeliveryWindow(callerUid, target);
                         boolean gcmBind = "bind".equals(type) && gms;
                         if (FcmTrust.allowsService(intent.getAction(), gms, selfInWindow, gcmBind)) {
                             if (gms) beginFcmDeliveryWindow(target);
@@ -538,6 +539,11 @@ public class OplusProxyFix extends XposedModule {
 
     static boolean isInFcmDeliveryWindow(int uid) {
         return isDeliveryTargetAllowed(sFcmDeliveryWindows.packageName(uid, SystemClock.elapsedRealtime()));
+    }
+
+    static boolean isInFcmDeliveryWindow(int uid, String target) {
+        return sFcmDeliveryWindows.contains(uid, target, SystemClock.elapsedRealtime())
+                && isDeliveryTargetAllowed(target);
     }
 
     private static String getFcmDeliveryPackage(int uid) {

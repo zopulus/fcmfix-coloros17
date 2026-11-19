@@ -10,9 +10,11 @@ import io.github.zopulus.ffc.util.FcmApps
 import android.database.ContentObserver
 import android.os.Handler
 import android.os.Looper
+import android.content.BroadcastReceiver
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
-import android.content.res.Configuration
+import android.content.IntentFilter
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
@@ -24,16 +26,22 @@ import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import io.github.zopulus.ffc.ui.FcmfixApp
-import io.github.zopulus.ffc.ui.FcmfixTheme
+import io.github.zopulus.ffc.ui.AppListRefresh
+import io.github.zopulus.ffc.ui.FcmfixInterface
+import io.github.zopulus.ffc.ui.InterfaceStyle
+import io.github.zopulus.ffc.ui.MainTab
 import io.github.zopulus.ffc.util.IceboxUtils
 import io.github.libxposed.service.XposedService
 import io.github.libxposed.service.XposedServiceHelper
@@ -68,15 +76,8 @@ data class InstalledApp(
     val icon: Bitmap
 )
 
-enum class ConfigSource {
-    REMOTE,
-    LOCAL,
-    DEFAULT
-}
-
 data class FcmfixUiState(
     val config: FcmfixConfig = FcmfixConfig(),
-    val configSource: ConfigSource = ConfigSource.DEFAULT,
     val xposedConnected: Boolean = false,
     val appsLoading: Boolean = true,
     val appsLoadFailed: Boolean = false
@@ -125,7 +126,22 @@ class MainActivity : ComponentActivity() {
         set(value) { ConfigMemory.editGeneration = value }
     private val uiState = ConfigMemory.state
     private var installedApps = androidx.compose.runtime.mutableStateOf<List<InstalledApp>>(emptyList())
+    // Activity recreation drops locale/theme-dependent presentation; manual refresh also bypasses it.
+    private val appCache = mutableMapOf<String, Pair<Long, InstalledApp>>()
     private var appsLoadingJob: Job? = null
+    private val appListRefresh = AppListRefresh()
+    private var packageChangesRegistered = false
+    private val packageChangeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            // A replacement also broadcasts removal and addition. Reload after it finishes.
+            if ((intent.action == Intent.ACTION_PACKAGE_REMOVED || intent.action == Intent.ACTION_PACKAGE_ADDED)
+                && intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)
+            ) return
+
+            appListRefresh.invalidate()
+            if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) loadInstalledApps()
+        }
+    }
     private var launcherIconHidden = androidx.compose.runtime.mutableStateOf(false)
     private val launcherAliasComponent by lazy {
         ComponentName(packageName, "$packageName.LauncherAlias")
@@ -135,18 +151,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         launcherIconHidden.value = packageManager.getComponentEnabledSetting(launcherAliasComponent) ==
             PackageManager.COMPONENT_ENABLED_STATE_DISABLED
-        val darkMode = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
-            Configuration.UI_MODE_NIGHT_YES
-        enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.auto(
-                android.graphics.Color.TRANSPARENT,
-                android.graphics.Color.TRANSPARENT
-            ) { darkMode },
-            navigationBarStyle = SystemBarStyle.auto(
-                android.graphics.Color.TRANSPARENT,
-                android.graphics.Color.TRANSPARENT
-            ) { darkMode }
-        )
+        enableEdgeToEdge()
         window.isNavigationBarContrastEnforced = false
         if (!ConfigMemory.initialized) {
             loadConfigFromLocalFile()
@@ -165,20 +170,34 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        registerPackageChanges()
+        val interfacePreferences = getSharedPreferences("interface", MODE_PRIVATE)
         setContent {
-            FcmfixTheme {
-                FcmfixApp(
-                    state = uiState.value,
-                    apps = installedApps.value,
-                    versionName = BuildConfig.VERSION_NAME,
-                    launcherIconHidden = launcherIconHidden.value,
-                    onConfigChange = ::updateConfig,
-                    onLauncherIconHiddenChange = ::setLauncherIconHidden,
-                    onOpenDiagnostics = ::openGmsDiagnostics,
-                    onOpenProject = ::openProjectPage,
-                    onReloadApps = ::loadInstalledApps
-                )
+            var style by remember {
+                mutableStateOf(InterfaceStyle.fromPreference(interfacePreferences.getString("style", null)))
             }
+            var initialTab by rememberSaveable { mutableStateOf(MainTab.HOME) }
+            FcmfixInterface(
+                style = style,
+                initialTab = initialTab,
+                onTabChange = { initialTab = it },
+                onStyleChange = { selected ->
+                    if (selected != style) {
+                        interfacePreferences.edit().putString("style", selected.preferenceValue).apply()
+                        initialTab = MainTab.SETTINGS
+                        style = selected
+                    }
+                },
+                state = uiState.value,
+                apps = installedApps.value,
+                versionName = BuildConfig.VERSION_NAME,
+                launcherIconHidden = launcherIconHidden.value,
+                onConfigChange = ::updateConfig,
+                onLauncherIconHiddenChange = ::setLauncherIconHidden,
+                onOpenDiagnostics = ::openGmsDiagnostics,
+                onOpenProject = ::openProjectPage,
+                onReloadApps = { loadInstalledApps(forceRefresh = true) }
+            )
         }
     }
 
@@ -186,10 +205,28 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         launcherIconHidden.value = packageManager.getComponentEnabledSetting(launcherAliasComponent) ==
             PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+        if (!packageChangesRegistered || uiState.value.appsLoadFailed) appListRefresh.invalidate()
         loadInstalledApps()
     }
 
+    private fun registerPackageChanges() {
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED)
+            addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addAction(Intent.ACTION_PACKAGE_CHANGED)
+            addDataScheme("package")
+        }
+        try {
+            registerReceiver(packageChangeReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            packageChangesRegistered = true
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "Package-change monitoring unavailable; refreshing on resume", error)
+        }
+    }
+
     override fun onDestroy() {
+        if (packageChangesRegistered) unregisterReceiver(packageChangeReceiver)
         contentResolver.unregisterContentObserver(configObserver)
         super.onDestroy()
     }
@@ -234,11 +271,6 @@ class MainActivity : ComponentActivity() {
                 if (ConfigFile.initializeIfMissing(appContext, FcmfixConfig().toJson()
                         .put("revision", 0L).put("bootstrapDefaults", true))) {
                     appContext.sendBroadcast(Intent(ACTION_UPDATE_CONFIG))
-                    runOnUiThread {
-                        if (latestRevision == 0L && uiState.value.configSource == ConfigSource.DEFAULT) {
-                            uiState.value = uiState.value.copy(configSource = ConfigSource.LOCAL)
-                        }
-                    }
                 }
             } catch (error: Exception) {
                 Log.e(TAG, "Could not initialize default configuration", error)
@@ -259,34 +291,26 @@ class MainActivity : ComponentActivity() {
                 // Read when this queued task actually executes, after earlier edits finish.
                 val persisted = runCatching { ConfigFile.read(applicationContext) }.getOrNull()
                 val localRevision = persisted?.optLong("revision", 0) ?: -1L
-                val preferences = xposedService?.getRemotePreferences("config")
-                if (preferences != null && preferences.getBoolean("init", false)
-                    && (preferences.getLong("revision", 0) > localRevision
-                        // Older releases did not write a revision. Preserve those
-                        // remote settings over a freshly bootstrapped default file.
-                        || persisted?.optBoolean("bootstrapDefaults", false) == true
-                            && preferences.getLong("revision", 0) == localRevision)) {
-                    val remoteSnapshot = ConfigSnapshot(preferences.all)
-                    val remote = configFromSnapshot(remoteSnapshot)
-                    val revision = remoteSnapshot.revision
-                    val localSaved = runCatching {
-                        ConfigFile.write(applicationContext, remote.toJson().put("revision", revision))
-                    }.onFailure { Log.w(TAG, "Local sync unavailable; using remote configuration", it) }.isSuccess
-                    runOnUiThread {
-                        if (generation == editGeneration) {
-                            latestRevision = maxOf(latestRevision, revision)
-                            uiState.value = uiState.value.copy(config = remote,
-                                configSource = if (localSaved) ConfigSource.LOCAL else ConfigSource.REMOTE)
-                        }
+                val remote = readRemoteSnapshot()
+                // Preserve pre-revision remote settings over freshly bootstrapped defaults.
+                val useRemote = remote != null && (
+                    remote.revision > localRevision ||
+                        remote.revision == localRevision && persisted?.optBoolean("bootstrapDefaults", false) == true
+                    )
+                val snapshot = if (useRemote) remote else persisted?.let(ConfigCodec::fromJson)
+                if (snapshot != null) {
+                    val config = configFromSnapshot(snapshot)
+                    if (useRemote) {
+                        runCatching {
+                            ConfigFile.write(applicationContext, config.toJson().put("revision", snapshot.revision))
+                        }.onFailure { Log.w(TAG, "Local sync unavailable; using remote configuration", it) }
+                    } else {
+                        saveRemote(snapshot)
                     }
-                } else if (persisted != null) {
-                    val localSnapshot = ConfigCodec.fromJson(persisted)
-                    val local = configFromSnapshot(localSnapshot)
-                    saveRemote(localSnapshot)
                     runOnUiThread {
                         if (generation == editGeneration) {
-                            latestRevision = maxOf(latestRevision, localRevision)
-                            uiState.value = uiState.value.copy(config = local, configSource = ConfigSource.LOCAL)
+                            latestRevision = maxOf(latestRevision, snapshot.revision)
+                            uiState.value = uiState.value.copy(config = config)
                         }
                     }
                 }
@@ -294,6 +318,11 @@ class MainActivity : ComponentActivity() {
             } catch (error: Throwable) { Log.w(TAG, "Config synchronization unavailable", error) }
         }
     }
+
+    private fun readRemoteSnapshot(): ConfigSnapshot? = runCatching {
+        val values = xposedService?.getRemotePreferences("config")?.all ?: return@runCatching null
+        if (values["init"] == true) ConfigSnapshot(values) else null
+    }.onFailure { Log.w(TAG, "Remote configuration unavailable", it) }.getOrNull()
 
     private fun configFromSnapshot(snapshot: ConfigSnapshot) = FcmfixConfig(
         allowedPackages = snapshot.allowList.toSet(),
@@ -313,9 +342,8 @@ class MainActivity : ComponentActivity() {
             val json = ConfigFile.read(this)
             val config = configFromJson(json)
             latestRevision = json.optLong("revision", 0)
-            uiState.value = uiState.value.copy(config = config, configSource = ConfigSource.LOCAL)
+            uiState.value = uiState.value.copy(config = config)
         } catch (error: Throwable) {
-            uiState.value = uiState.value.copy(configSource = ConfigSource.DEFAULT)
             Log.i(TAG, "Using default configuration", error)
         }
     }
@@ -327,7 +355,8 @@ class MainActivity : ComponentActivity() {
     private fun updateConfig(requested: FcmfixConfig) {
         val previous = uiState.value.config
         val config = requested.normalized()
-        if (config.includeIceBoxDisabledApps && !uiState.value.config.includeIceBoxDisabledApps) requestIceBoxPermissionIfNeeded()
+        if (config == previous) return
+        if (config.includeIceBoxDisabledApps && !previous.includeIceBoxDisabledApps) requestIceBoxPermissionIfNeeded()
         editGeneration++
         val generation = editGeneration
         latestRevision = maxOf(latestRevision + 1, System.currentTimeMillis())
@@ -341,11 +370,8 @@ class MainActivity : ComponentActivity() {
                         override fun write(json: JSONObject) { ConfigFile.write(applicationContext, json) }
                     },
                     object : ConfigPersistence.Store {
-                        override fun read(): JSONObject? {
-                            val values = xposedService?.getRemotePreferences("config")?.all ?: return null
-                            if (values["init"] != true) return null
-                            val snapshot = ConfigSnapshot(values)
-                            return configFromSnapshot(snapshot).toJson().put("revision", snapshot.revision)
+                        override fun read(): JSONObject? = readRemoteSnapshot()?.let { snapshot ->
+                            configFromSnapshot(snapshot).toJson().put("revision", snapshot.revision)
                         }
                         override fun write(json: JSONObject) {
                             if (!saveRemote(ConfigCodec.fromJson(json))) {
@@ -370,8 +396,7 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     latestRevision = maxOf(latestRevision, persistedRevision)
                     if (generation == editGeneration) {
-                        uiState.value = uiState.value.copy(config = persistedConfig,
-                            configSource = if (result.localSaved) ConfigSource.LOCAL else ConfigSource.REMOTE)
+                        uiState.value = uiState.value.copy(config = persistedConfig)
                     }
                 }
                 applicationContext.sendBroadcast(Intent(ACTION_UPDATE_CONFIG))
@@ -410,19 +435,32 @@ class MainActivity : ComponentActivity() {
         .put(KEY_DOZE_GOOGLE_WHITELIST, dozeGoogleWhitelist)
         .put(KEY_ROOT_DEEP_SLEEP_NETWORK_WHITELIST, rootDeepSleepNetworkWhitelist)
 
-    private fun loadInstalledApps() {
+    private fun loadInstalledApps(forceRefresh: Boolean = false) {
+        if (forceRefresh) appListRefresh.invalidate(force = true)
         if (appsLoadingJob?.isActive == true) return
+        val first = appListRefresh.take() ?: return
+
         uiState.value = uiState.value.copy(appsLoading = true, appsLoadFailed = false)
         appsLoadingJob = lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching { queryInstalledApps() }
-            }
-            result.onSuccess { apps ->
-                installedApps.value = apps
-                uiState.value = uiState.value.copy(appsLoading = false, appsLoadFailed = false)
-            }.onFailure { error ->
-                uiState.value = uiState.value.copy(appsLoading = false, appsLoadFailed = true)
-                Log.e(TAG, "Could not read installed applications", error)
+            var request: AppListRefresh.Mode? = first
+            while (request != null) {
+                val clearCache = request == AppListRefresh.Mode.FORCED
+                val result = withContext(Dispatchers.IO) {
+                    runCatching {
+                        if (clearCache) appCache.clear()
+                        queryInstalledApps()
+                    }
+                }
+                request = if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                    appListRefresh.take()
+                } else null
+
+                result.onSuccess { apps -> installedApps.value = apps }
+                    .onFailure { error -> Log.e(TAG, "Could not read installed applications", error) }
+                uiState.value = uiState.value.copy(
+                    appsLoading = request != null,
+                    appsLoadFailed = request == null && result.isFailure,
+                )
             }
         }
     }
@@ -438,15 +476,19 @@ class MainActivity : ComponentActivity() {
             if (!receivers.any(::isFcmReceiver)) return@mapNotNull null
             val applicationInfo = packageInfo.applicationInfo ?: return@mapNotNull null
             try {
+                val cached = appCache[packageInfo.packageName]
+                if (cached != null && cached.first == packageInfo.lastUpdateTime) return@mapNotNull cached.second
                 InstalledApp(
                     packageName = packageInfo.packageName,
                     label = applicationInfo.loadLabel(packageManager).toString(),
                     icon = drawableToBitmap(applicationInfo.loadIcon(packageManager))
-                )
+                ).also { appCache[packageInfo.packageName] = packageInfo.lastUpdateTime to it }
             } catch (error: Throwable) {
                 Log.w(TAG, "Skipping ${packageInfo.packageName}", error)
                 null
             }
+        }.also { apps ->
+            appCache.keys.retainAll(apps.mapTo(mutableSetOf(), InstalledApp::packageName))
         }.sortedWith { first, second -> collator.compare(first.label, second.label) }
     }
 

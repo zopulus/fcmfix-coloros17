@@ -24,4 +24,8 @@ public final class FcmDeliveryWindow {
     }
 
     public boolean contains(int uid, long now) { return packageName(uid, now) != null; }
+
+    public boolean contains(int uid, String target, long now) {
+        return target != null && target.equals(packageName(uid, now));
+    }
 }

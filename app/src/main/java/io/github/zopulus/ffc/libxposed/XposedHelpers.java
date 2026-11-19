@@ -66,16 +66,16 @@ public final class XposedHelpers {
         }
     }
 
-    public static XC_MethodHook.Unhook findAndHookMethod(String className, ClassLoader classLoader,
-                                                          String methodName, Object... parameterTypesAndCallback) {
-        return findAndHookMethod(findClass(className, classLoader), methodName, parameterTypesAndCallback);
+    public static void findAndHookMethod(String className, ClassLoader classLoader,
+                                        String methodName, Object... parameterTypesAndCallback) {
+        findAndHookMethod(findClass(className, classLoader), methodName, parameterTypesAndCallback);
     }
 
-    public static XC_MethodHook.Unhook findAndHookMethod(Class<?> clazz,
-                                                          String methodName, Object... parameterTypesAndCallback) {
+    public static void findAndHookMethod(Class<?> clazz,
+                                        String methodName, Object... parameterTypesAndCallback) {
         ParsedHookArgs parsed = parseHookArgs(parameterTypesAndCallback);
         Method method = findMethodExact(clazz, methodName, parsed.parameterTypes);
-        return XposedBridge.hookMethod(method, parsed.callback);
+        XposedBridge.hookMethod(method, parsed.callback);
     }
 
     public static Object getObjectField(Object obj, String fieldName) {
@@ -97,22 +97,9 @@ public final class XposedHelpers {
     }
 
     public static Object callStaticMethod(Class<?> clazz, String methodName, Object... args) {
-        Class<?>[] declaredParamTypes = null;
-        Object[] invokeArgs = args;
-        if (args.length > 0 && args[0] instanceof Class<?>[]) {
-            declaredParamTypes = (Class<?>[]) args[0];
-            invokeArgs = Arrays.copyOfRange(args, 1, args.length);
-        }
-
-        Method method;
-        if (declaredParamTypes != null) {
-            method = findMethodExact(clazz, methodName, declaredParamTypes);
-        } else {
-            method = findBestMethod(clazz, methodName, invokeArgs);
-        }
-
+        Method method = findBestMethod(clazz, methodName, args);
         try {
-            return method.invoke(null, invokeArgs);
+            return method.invoke(null, args);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

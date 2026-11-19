@@ -60,18 +60,6 @@ public abstract class XC_MethodHook {
         }
     }
 
-    public class Unhook {
-        private final XposedBridge.HookHandleWrapper handle;
-
-        Unhook(XposedBridge.HookHandleWrapper handle) {
-            this.handle = handle;
-        }
-
-        public void unhook() {
-            handle.unhook();
-        }
-    }
-
     protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
     }
 

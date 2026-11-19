@@ -30,7 +30,7 @@ public final class XposedBridge {
         return xposedInterface.getRemotePreferences(group);
     }
 
-    public static XC_MethodHook.Unhook hookMethod(Member member, XC_MethodHook callback) {
+    public static void hookMethod(Member member, XC_MethodHook callback) {
         ensureInit();
         if (!(member instanceof Method) && !(member instanceof Constructor<?>)) {
             throw new IllegalArgumentException("Only Method/Constructor can be hooked");
@@ -38,7 +38,7 @@ public final class XposedBridge {
 
         // One interceptor per registration. Replaying a global callback list here would
         // run callbacks N times when a method has N registrations.
-        XposedInterface.HookHandle handle = xposedInterface.hook((java.lang.reflect.Executable) member)
+        xposedInterface.hook((java.lang.reflect.Executable) member)
                 .intercept(chain -> {
                     XC_MethodHook.MethodHookParam param = new XC_MethodHook.MethodHookParam();
                     param.method = chain.getExecutable();
@@ -47,8 +47,6 @@ public final class XposedBridge {
                     return HookInvocation.invoke(param, callback, chain::proceed,
                             error -> log("Hook failed: " + member + ": " + error));
                 });
-
-        return callback.new Unhook(new HookHandleWrapper(handle));
     }
 
     /**
@@ -63,18 +61,6 @@ public final class XposedBridge {
         } catch (Throwable e) {
             log("deoptimize failed: " + member + ": " + e);
             return false;
-        }
-    }
-
-    static final class HookHandleWrapper {
-        private final XposedInterface.HookHandle handle;
-
-        HookHandleWrapper(XposedInterface.HookHandle handle) {
-            this.handle = handle;
-        }
-
-        void unhook() {
-            handle.unhook();
         }
     }
 
