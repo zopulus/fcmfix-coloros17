@@ -2,9 +2,7 @@
 
 优化 FCM 在 ColorOS17 的使用体验。
 
-适配 Material 3 Expressive UI。
-
-仅适配 ColorOS17；安装包最低要求 Android 14（API 34），与反射缓存使用的系统 API 一致。
+适配 Material 3 Expressive UI 和 COUI。
 
 ## 功能
 
