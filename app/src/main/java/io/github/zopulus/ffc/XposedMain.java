@@ -11,6 +11,7 @@ import io.github.zopulus.ffc.xposed.OplusProxyFix;
 import io.github.zopulus.ffc.xposed.OplusGoogleNetworkFix;
 import io.github.zopulus.ffc.xposed.OplusDeviceIdleFix;
 import io.github.zopulus.ffc.xposed.OplusBatteryNetworkFix;
+import io.github.zopulus.ffc.xposed.WifiHeartbeatFix;
 import io.github.zopulus.ffc.xposed.XposedModule;
 
 import io.github.libxposed.api.XposedModuleInterface;
@@ -31,6 +32,7 @@ public class XposedMain extends io.github.libxposed.api.XposedModule {
         safeInit(() -> new OplusProxyFix(classLoader), "OplusProxyFix");
         safeInit(() -> new OplusGoogleNetworkFix(classLoader), "OplusGoogleNetworkFix");
         safeInit(() -> new OplusDeviceIdleFix(classLoader), "OplusDeviceIdleFix");
+        safeInit(() -> new WifiHeartbeatFix(classLoader), "WifiHeartbeatFix");
         // system_server 中 attachBaseContext 的 hook 安装过晚，主动获取系统上下文
         initSystemServerContext(classLoader);
     }
@@ -46,6 +48,7 @@ public class XposedMain extends io.github.libxposed.api.XposedModule {
             XposedModule.setSelfPackageName("com.oplus.battery");
             safeInit(() -> new OplusBatteryNetworkFix(param.getClassLoader()),
                     "OplusBatteryNetworkFix");
+            initAppProcessContext(param.getClassLoader());
         }
     }
 
@@ -73,11 +76,25 @@ public class XposedMain extends io.github.libxposed.api.XposedModule {
             if (systemContext instanceof Context) {
                 XposedModule.initSystemServerContext((Context) systemContext);
                 XposedBridge.log("[fcmfix] 系统上下文初始化成功");
-            } else {
-                XposedBridge.log("[fcmfix] 系统上下文获取失败: getSystemContext 返回 null");
+                return;
             }
+            XposedBridge.log("[fcmfix] 系统上下文获取失败: getSystemContext 返回 null");
         } catch (Throwable e) {
             XposedBridge.log("[fcmfix] 系统上下文初始化失败: " + e.getMessage());
         }
+        XposedModule.ensureContextHook(classLoader);
+    }
+
+    private void initAppProcessContext(ClassLoader classLoader) {
+        try {
+            Class<?> activityThreadClass = XposedHelpers.findClass("android.app.ActivityThread", classLoader);
+            Object app = XposedHelpers.callStaticMethod(activityThreadClass, "currentApplication");
+            if (app instanceof Context) {
+                XposedModule.initSystemServerContext((Context) app);
+                return;
+            }
+        } catch (Throwable ignored) {
+        }
+        XposedModule.ensureContextHook(classLoader);
     }
 }

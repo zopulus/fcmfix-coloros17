@@ -2,15 +2,12 @@ package io.github.zopulus.ffc.xposed;
 
 import android.content.Intent;
 import android.content.Context;
-import android.content.pm.ApplicationInfo;
 import android.os.Handler;
 import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import io.github.zopulus.ffc.util.GoogleProtection;
 import io.github.zopulus.ffc.util.RetryingTask;
 import java.lang.reflect.Constructor;
 import android.content.pm.PackageManager;
@@ -40,6 +37,10 @@ public class OplusBatteryNetworkFix extends XposedModule {
         return () -> future.cancel(false);
     }, this::tryReleaseExistingRestriction, 1000, 3000);
     private static volatile String policyState = "pending", policyDetail = "Awaiting OEM policy verification";
+
+    @Override protected void onCanReadConfig() {
+        requestRestrictionVerification();
+    }
 
     @Override protected void onConfigLoaded(io.github.zopulus.ffc.util.ConfigSnapshot previous,
             io.github.zopulus.ffc.util.ConfigSnapshot current) {
@@ -138,25 +139,11 @@ public class OplusBatteryNetworkFix extends XposedModule {
     private static final int POLICY_NONE = 0;
     public OplusBatteryNetworkFix(ClassLoader classLoader) {
         super(classLoader);
-        installDeepSleepWhitelistHook();
-        try {
-            installInitialRestrictionRelease(XposedHelpers.findClass(ColorOs17Compat.GOOGLE_CONTROLLER, classLoader));
-        } catch (Throwable error) {
-            printLog("Initial Google restriction release unavailable: " + error);
-        }
-        try {
-            startHookGoogleNetworkPolicy();
-        } catch (Throwable e) {
-            printLog("hook error Oplus Battery GMS network policy: "
-                    + e.getClass().getSimpleName() + ": " + e.getMessage());
-        }
-        try {
-            startHookGoogleRestrictBroadcast();
-        } catch (Throwable e) {
-            printLog("hook error Oplus Battery Google restrict broadcast: "
-                    + e.getClass().getSimpleName() + ": " + e.getMessage());
-        }
-        if (isConfigurationReady()) requestRestrictionVerification();
+        HookInstaller.install("initial Google restriction release", () ->
+                installInitialRestrictionRelease(XposedHelpers.findClass(ColorOs17Compat.GOOGLE_CONTROLLER, classLoader)));
+        HookInstaller.install("Oplus Battery GMS network policy", this::startHookGoogleNetworkPolicy);
+        HookInstaller.install("Oplus Battery Google restrict broadcast", this::startHookGoogleRestrictBroadcast);
+        if (context != null || isConfigurationReady()) requestRestrictionVerification();
     }
 
     /**
@@ -214,7 +201,12 @@ public class OplusBatteryNetworkFix extends XposedModule {
                 protected void beforeHookedMethod(MethodHookParam param) {
                     int uid = (Integer) param.args[0];
                     int policy = (Integer) param.args[1];
-                    if (policy != POLICY_REJECT_ALL || !isGoogleNetworkUid(uid)) {
+                    if (policy != POLICY_REJECT_ALL) return;
+                    if (context == null) {
+                        printLog("Oplus Battery network hook skipped before context initialization");
+                        return;
+                    }
+                    if (!ColorOs17Compat.isGoogleNetworkUid(context, uid)) {
                         return;
                     }
 
@@ -229,86 +221,6 @@ public class OplusBatteryNetworkFix extends XposedModule {
 
         if (hooks == 0) {
             throw new NoSuchMethodError(NETWORK_CONTROL_MANAGER + "#setUidPolicy(int,int)");
-        }
-    }
-
-    private boolean isGoogleNetworkUid(int uid) {
-        if (context == null) {
-            printLog("Oplus Battery network hook skipped before context initialization");
-            return false;
-        }
-
-        PackageManager packageManager = context.getPackageManager();
-        for (String packageName : ColorOs17Compat.NETWORK_PACKAGES) {
-            try {
-                if (packageManager.getPackageUid(packageName, 0) == uid) {
-                    return true;
-                }
-            } catch (PackageManager.NameNotFoundException ignored) {
-            }
-        }
-        return false;
-    }
-    private void installDeepSleepWhitelistHook() {
-        try {
-            XposedHelpers.findAndHookMethod(
-                    "com.oplus.deepsleep.ControllerCenter",
-                    classLoader,
-                    "determineNetWorkWhiteUidList",
-                    new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            if (param.hasThrowable() || !isConfigurationReady()
-                                    || !getBooleanConfig("deepSleepGoogleWhitelist", true)) {
-                                return;
-                            }
-                            try {
-                                Object original = param.getResult();
-                                if (!(original instanceof List)) {
-                                    return;
-                                }
-                                Context batteryContext = (Context) XposedHelpers.getObjectField(
-                                        param.thisObject, "mContext");
-                                if (batteryContext == null) {
-                                    printLog("睡眠待机优化豁免未添加：Battery Context 不可用");
-                                    return;
-                                }
-
-                                List<Object> whitelist = new ArrayList<>((List<?>) original);
-                                List<String> added = new ArrayList<>();
-                                for (String name : ColorOs17Compat.WHITELIST_PACKAGES)
-                                    addUidForPackage(batteryContext, whitelist, added, name);
-                                if (getBooleanConfig("rootDeepSleepNetworkWhitelist", false)) {
-                                    int previousSize = whitelist.size();
-                                    GoogleProtection.addUid(whitelist, 0);
-                                    if (whitelist.size() != previousSize) added.add("uid 0");
-                                }
-
-                                if (!added.isEmpty()) {
-                                    param.setResult(whitelist);
-                                    printLog("睡眠待机优化豁免追加：" + added);
-                                }
-                            } catch (Throwable e) {
-                                printLog("睡眠待机优化豁免 Hook 失败：" + e.getMessage());
-                            }
-                        }
-                    });
-            printLog("Battery 睡眠待机优化豁免 Hook 已安装");
-        } catch (Throwable e) {
-            printLog("Battery 睡眠待机优化豁免 Hook 安装失败：" + e.getMessage());
-        }
-    }
-
-    private void addUidForPackage(Context context, List<Object> whitelist,
-                                  List<String> added, String packageName) {
-        try {
-            ApplicationInfo app = context.getPackageManager().getApplicationInfo(packageName, 0);
-            String uid = String.valueOf(app.uid);
-            int previousSize = whitelist.size();
-            GoogleProtection.addUid(whitelist, app.uid);
-            if (whitelist.size() != previousSize) added.add(packageName + "=" + uid);
-        } catch (PackageManager.NameNotFoundException e) {
-            printLog("未找到联网豁免目标：" + packageName);
         }
     }
 

@@ -13,12 +13,14 @@ import io.github.zopulus.ffc.util.ConfigSchema;
 import io.github.zopulus.ffc.util.ConfigCodec;
 import io.github.zopulus.ffc.util.ConfigSnapshot;
 import io.github.zopulus.ffc.util.IceboxUtils;
-import org.json.JSONArray;
-import org.json.JSONObject;
+import io.github.zopulus.ffc.util.ProviderConfig;
 
 /** Only the module, system server and the scoped Battery process can read configuration. */
 public class ConfigProvider extends ContentProvider {
-    @Override public boolean onCreate() { return true; }
+    @Override public boolean onCreate() {
+        ModuleService.INSTANCE.bindXposedService(getContext());
+        return true;
+    }
     private boolean isBattery(int uid) {
         try { return getContext().getPackageManager().getPackageUid("com.oplus.battery", 0) == uid; }
         catch (Exception ignored) { return false; }
@@ -33,8 +35,14 @@ public class ConfigProvider extends ContentProvider {
         MatrixCursor data = new MatrixCursor(new String[]{"key", "value"});
         if (!"/config".equals(uri.getPath())) return data;
         try {
-            ConfigSnapshot snapshot =
-                    ConfigCodec.fromJson(ConfigFile.read(getContext()));
+            org.json.JSONObject local = ConfigFile.read(getContext());
+            ConfigSnapshot snapshot = ConfigCodec.fromJson(local);
+            if (ConfigSchema.HOOK_SNAPSHOT.equals(selection)) {
+                // The unmodified file carries the baseline needed to replay offline edits.
+                data.addRow(new Object[]{ConfigSchema.HOOK_SNAPSHOT, local.toString()});
+                return data;
+            }
+            if (local.optBoolean("bootstrapDefaults")) data.addRow(new Object[]{"bootstrapDefaults", "1"});
             data.addRow(new Object[]{"init", "1"});
             data.addRow(new Object[]{"revision", Long.toString(snapshot.revision)});
             for (String key : ConfigSchema.OPTIONS)
@@ -56,14 +64,10 @@ public class ConfigProvider extends ContentProvider {
             if (!io.github.zopulus.ffc.util.ActivationDeadline.isValid(deadline, now)) return result;
             long identity = Binder.clearCallingIdentity();
             try {
-                JSONObject config = ConfigFile.read(getContext());
-                if (!config.optBoolean("includeIceBoxDisableApp", false)) return result;
-                JSONArray allowed = config.getJSONArray("allowList");
-                boolean permitted = false;
-                for (int i = 0; i < allowed.length(); i++) if (arg.equals(allowed.getString(i))) permitted = true;
-                if (!permitted) return result;
-                IceboxUtils.activeAppBeforeDeadline(getContext(), arg, deadline);
-                result.putBoolean("enabled", IceboxUtils.isAppEnabled(getContext(), arg));
+                result.putBoolean("enabled", IceboxUtils.activeAppBeforeDeadline(getContext(), arg, deadline, () -> {
+                    ConfigSnapshot config = ConfigCodec.fromJson(ProviderConfig.latest(getContext(), extras, true));
+                    return config.permitsIceBox(arg, extras.getLong("minimumRevision", 0));
+                }));
             } catch (Exception error) { android.util.Log.w("fcmfix", "Frozen app activation failed", error); }
             finally { Binder.restoreCallingIdentity(identity); }
             return result;

@@ -57,19 +57,11 @@ public class ConfigSnapshotTest {
     @Test public void retiredOptionsRequireMigrationEvenWhenCurrentValuesMatch() {
         Map<String, Object> values = storedValues();
         ConfigSnapshot snapshot = new ConfigSnapshot(values);
-        for (String key : List.of("disableGoogleNetworkControl", "autoAllowExcluded",
-                "autoAllowOnNotificationGrant", "notificationEnableEvents")) {
+        for (String key : ConfigSchema.RETIRED_KEYS) {
             Map<String, Object> legacy = new HashMap<>(values);
             legacy.put(key, false);
             assertFalse(key, snapshot.matchesPreferences(legacy));
         }
-    }
-
-    @Test public void normalizedSnapshotMustRepairContradictoryStoredFlags() {
-        Map<String, Object> values = storedValues();
-        values.put("deepSleepGoogleWhitelist", false);
-        values.put("rootDeepSleepNetworkWhitelist", true);
-        assertFalse(new ConfigSnapshot(values).matchesPreferences(values));
     }
 
     @Test public void revisionIsPreservedAndInvalidValuesRejected() {
@@ -78,38 +70,27 @@ public class ConfigSnapshotTest {
         assertThrows(IllegalArgumentException.class, () -> new ConfigSnapshot(Collections.singletonMap("revision", -1L)));
         assertThrows(IllegalArgumentException.class, () -> new ConfigSnapshot(Collections.singletonMap("revision", "123")));
     }
-    @Test public void localGoogleFlagsKeepDefaultsAndRespectOverrides() {
+
+    @Test public void activeOptionsKeepDefaultsRespectOverridesAndIgnoreRetiredKeys() {
         ConfigSnapshot defaults = new ConfigSnapshot(Collections.emptyMap());
-        assertTrue(defaults.options.get("deepSleepGoogleWhitelist"));
-        assertFalse(defaults.options.containsKey("disableGoogleNetworkControl"));
-        assertFalse(defaults.options.get("rootDeepSleepNetworkWhitelist"));
+        assertTrue(defaults.options.get("adaptiveWifiHeartbeat"));
+        assertTrue(defaults.options.get("autoAllowNewApps"));
+        for (String retired : ConfigSchema.RETIRED_KEYS) {
+            assertFalse(retired, defaults.options.containsKey(retired));
+        }
+
         Map<String, Object> values = new HashMap<>();
+        values.put("adaptiveWifiHeartbeat", false);
+        values.put("autoAllowNewApps", false);
         values.put("deepSleepGoogleWhitelist", false);
-        values.put("disableGoogleNetworkControl", false);
+        values.put("dozeGoogleWhitelist", false);
         values.put("rootDeepSleepNetworkWhitelist", true);
         ConfigSnapshot custom = new ConfigSnapshot(values);
-        assertFalse(custom.options.get("deepSleepGoogleWhitelist"));
-        assertFalse(custom.options.containsKey("disableGoogleNetworkControl"));
-        assertFalse(custom.options.get("rootDeepSleepNetworkWhitelist"));
-        values.put("deepSleepGoogleWhitelist", true);
-        assertTrue(new ConfigSnapshot(values).options.get("rootDeepSleepNetworkWhitelist"));
-    }
-    @Test public void dozeMigratesOldSettingAndRemainsIndependent() {
-        Map<String, Object> values = new HashMap<>();
-        values.put("deepSleepGoogleWhitelist", false);
-        assertFalse(new ConfigSnapshot(values).options.get("dozeGoogleWhitelist"));
-        values.put("dozeGoogleWhitelist", true);
-        values.put("rootDeepSleepNetworkWhitelist", true);
-        ConfigSnapshot snapshot = new ConfigSnapshot(values);
-        assertTrue(snapshot.options.get("dozeGoogleWhitelist"));
-        assertFalse(snapshot.options.get("rootDeepSleepNetworkWhitelist"));
-        values.put("deepSleepGoogleWhitelist", true);
-        values.put("dozeGoogleWhitelist", false);
-        snapshot = new ConfigSnapshot(values);
-        assertFalse(snapshot.options.get("dozeGoogleWhitelist"));
-        assertTrue(snapshot.options.get("rootDeepSleepNetworkWhitelist"));
-        values.put("dozeGoogleWhitelist", "true");
-        assertThrows(IllegalArgumentException.class, () -> new ConfigSnapshot(values));
+        assertFalse(custom.options.get("adaptiveWifiHeartbeat"));
+        assertFalse(custom.options.get("autoAllowNewApps"));
+        assertFalse(custom.options.containsKey("deepSleepGoogleWhitelist"));
+        assertFalse(custom.options.containsKey("dozeGoogleWhitelist"));
+        assertFalse(custom.options.containsKey("rootDeepSleepNetworkWhitelist"));
     }
     @Test public void missingOptionsUseSafeDefaults() {
         ConfigSnapshot snapshot = new ConfigSnapshot(Collections.emptyMap());

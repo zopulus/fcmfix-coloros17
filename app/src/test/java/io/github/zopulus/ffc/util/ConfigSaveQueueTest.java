@@ -29,6 +29,29 @@ public class ConfigSaveQueueTest {
         } finally { release.countDown(); caller.shutdownNow(); }
     }
 
+    @Test public void completedWriteNotifiesEvenAfterCallerTimesOut() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+        CountDownLatch notified = new CountDownLatch(1);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> reply = caller.submit(() -> {
+                ConfigSaveQueue.saveAndNotify(() -> {
+                    entered.countDown();
+                    if (!release.await(15, TimeUnit.SECONDS)) throw new AssertionError("Blocked save");
+                    return true;
+                }, notified::countDown);
+                return null;
+            });
+            assertTrue(entered.await(2, TimeUnit.SECONDS));
+            ExecutionException failure = assertThrows(ExecutionException.class,
+                    () -> reply.get(10, TimeUnit.SECONDS));
+            assertTrue(failure.getCause() instanceof TimeoutException);
+            release.countDown();
+            assertTrue(notified.await(2, TimeUnit.SECONDS));
+            ConfigSaveQueue.saveAndNotify(() -> false, () -> fail("Duplicate notification"));
+        } finally { release.countDown(); caller.shutdownNow(); }
+    }
+
     @Test public void failedCommitIsReportedToCaller() {
         java.io.IOException failure = new java.io.IOException("disk full");
         assertSame(failure, assertThrows(java.io.IOException.class,

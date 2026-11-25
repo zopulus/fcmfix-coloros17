@@ -17,6 +17,7 @@ public final class XposedHelpers {
     };
     private static final class MemberCache {
         final ConcurrentHashMap<String, Field> fields = new ConcurrentHashMap<>();
+        final java.util.Set<String> missingFields = ConcurrentHashMap.newKeySet();
         final ConcurrentHashMap<MethodKey, Method> methods = new ConcurrentHashMap<>();
     }
     private record MethodKey(String name, List<Class<?>> types, boolean exact) { }
@@ -122,21 +123,35 @@ public final class XposedHelpers {
         return new ParsedHookArgs(parameterTypes, callback);
     }
 
-    private static Field findField(Class<?> clazz, String fieldName) {
+    public static Field findFieldIfExists(Class<?> clazz, String fieldName) {
+        if (clazz == null || fieldName == null) return null;
         MemberCache cache = MEMBERS.get(clazz);
         Field cached = cache.fields.get(fieldName);
         if (cached != null) return cached;
+        if (cache.missingFields.contains(fieldName)) return null;
         Class<?> current = clazz;
         while (current != null) {
             try {
                 Field field = current.getDeclaredField(fieldName);
                 field.setAccessible(true);
-                Field previous = cache.fields.putIfAbsent(fieldName, field);
-                return previous == null ? field : previous;
+                if (cache.fields.size() < MAX_METHOD_CACHE) {
+                    Field previous = cache.fields.putIfAbsent(fieldName, field);
+                    if (previous != null) return previous;
+                }
+                return field;
             } catch (NoSuchFieldException ignored) {
                 current = current.getSuperclass();
             }
         }
+        if (cache.missingFields.size() < MAX_METHOD_CACHE) {
+            cache.missingFields.add(fieldName);
+        }
+        return null;
+    }
+
+    private static Field findField(Class<?> clazz, String fieldName) {
+        Field field = findFieldIfExists(clazz, fieldName);
+        if (field != null) return field;
         throw new NoSuchFieldError(clazz.getName() + "#" + fieldName);
     }
 

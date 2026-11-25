@@ -15,19 +15,9 @@ public class OplusDeviceIdleFix extends XposedModule {
             "com.android.server.alarm.OplusGoogleAlarmRestrict";
     public OplusDeviceIdleFix(ClassLoader classLoader) {
         super(classLoader);
-        try {
-            startHook();
-        } catch (Throwable e) {
-            printLog("hook error OplusDeviceIdleFix: "
-                    + e.getClass().getSimpleName() + ": " + e.getMessage());
-        }
-        try { startHookDeepSleepAlarm(); } catch (Throwable e) { printLog("Deep-sleep alarm protection unavailable: " + e); }
-        try {
-            startHookGoogleAlarmRestrict();
-        } catch (Throwable e) {
-            printLog("hook error Oplus Google alarm restrict: "
-                    + e.getClass().getSimpleName() + ": " + e.getMessage());
-        }
+        HookInstaller.install("OplusDeviceIdleFix", this::startHook);
+        HookInstaller.install("deep-sleep alarm protection", this::startHookDeepSleepAlarm);
+        HookInstaller.install("Oplus Google alarm restrict", this::startHookGoogleAlarmRestrict);
     }
 
     /**
@@ -124,8 +114,7 @@ public class OplusDeviceIdleFix extends XposedModule {
                 if (before) boundaryHooks++;
                 printLog("Oplus Doze whitelist hook active: " + describeMethod(method));
             } else if ("getGoogleRestrictSwitch".equals(method.getName())
-                    && (method.getReturnType() == boolean.class
-                    || method.getReturnType() == Boolean.class)) {
+                    && isBooleanType(method.getReturnType())) {
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
@@ -144,7 +133,7 @@ public class OplusDeviceIdleFix extends XposedModule {
     }
 
     private void restoreGoogleEntries(List<String> whiteList) {
-        if (whiteList == null || !isConfigurationReady() || !getBooleanConfig("dozeGoogleWhitelist", true)) return;
+        if (whiteList == null) return;
         for (String name : ColorOs17Compat.WHITELIST_PACKAGES) if (!whiteList.contains(name)) whiteList.add(name);
     }
 
@@ -154,16 +143,5 @@ public class OplusDeviceIdleFix extends XposedModule {
             if (arg instanceof List) return (List<String>) arg;
         }
         return null;
-    }
-
-    private static String describeMethod(Method method) {
-        StringBuilder result = new StringBuilder(method.getDeclaringClass().getName())
-                .append('#').append(method.getName()).append('(');
-        Class<?>[] types = method.getParameterTypes();
-        for (int i = 0; i < types.length; i++) {
-            if (i > 0) result.append(',');
-            result.append(types[i].getSimpleName());
-        }
-        return result.append("): ").append(method.getReturnType().getSimpleName()).toString();
     }
 }

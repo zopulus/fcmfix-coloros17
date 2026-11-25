@@ -13,7 +13,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
@@ -239,7 +238,7 @@ private fun LazyListScope.couiAppItems(
                 cardListPosition = position,
                 startAction = {
                     Image(
-                        bitmap = remember(app.icon) { app.icon.asImageBitmap() },
+                        bitmap = app.icon,
                         modifier = Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)),
                         contentDescription = null,
                     )

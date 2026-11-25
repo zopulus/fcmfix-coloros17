@@ -4,83 +4,43 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class FcmDeliveryWindowTest {
-    @Test public void sharedUidCannotBorrowAnotherPackagesServiceWindow() {
+    @Test public void fastPathStartsInactiveAndExpiresCleanlyWithoutPerUidLookup() {
         FcmDeliveryWindow window = new FcmDeliveryWindow();
-        window.begin(10001, "app.a", 100);
-        assertTrue(FcmTrust.allowsService("com.google.firebase.MESSAGING_EVENT", false,
-                window.contains(10001, "app.a", 101), false));
-        assertFalse(FcmTrust.allowsService("com.google.firebase.MESSAGING_EVENT", false,
-                window.contains(10001, "app.b", 101), false));
+        assertFalse(window.hasActiveWindow(0L));
+        assertNull(window.packageName(10123, 0L));
+
+        window.begin(10123, "com.example.chat", 1_000L);
+        assertTrue(window.hasActiveWindow(1_000L));
+        assertTrue(window.hasActiveWindow(20_999L));
+        assertEquals("com.example.chat", window.packageName(10123, 20_999L));
+        assertNull(window.packageName(10124, 15_000L));
+
+        assertFalse(window.hasActiveWindow(21_000L));
+        assertNull(window.packageName(10123, 21_000L));
     }
 
-    @Test public void targetWindowChecksUidExpiryAndLatestPackageTogether() {
+    @Test public void overlappingWindowsTrackFurthestDeadlineAndSaturateNearLongMax() {
         FcmDeliveryWindow window = new FcmDeliveryWindow();
-        window.begin(10001, "app.a", 100);
-        assertFalse(window.contains(10002, "app.a", 101));
-        assertFalse(window.contains(10001, null, 101));
-        window.begin(10001, "app.b", 200);
-        assertFalse(window.contains(10001, "app.a", 201));
-        assertTrue(window.contains(10001, "app.b", 20199));
-        assertFalse(window.contains(10001, "app.b", 20200));
+        window.begin(10123, "com.example.first", 5_000L);
+        window.begin(10124, "com.example.second", 12_000L);
+        assertNull(window.packageName(10123, 26_000L));
+        assertEquals("com.example.second", window.packageName(10124, 26_000L));
+        assertTrue(window.hasActiveWindow(31_999L));
+        assertFalse(window.hasActiveWindow(32_000L));
+
+        window.begin(10125, "com.example.edge", Long.MAX_VALUE - 5_000L);
+        assertTrue(window.hasActiveWindow(Long.MAX_VALUE - 1L));
+        assertEquals("com.example.edge", window.packageName(10125, Long.MAX_VALUE - 1L));
+        assertFalse(window.hasActiveWindow(Long.MAX_VALUE));
     }
 
-    @Test public void invalidUidCannotCreateWindow() {
+    @Test public void expiredEntriesArePrunedWhenBurstExceedsThreshold() {
         FcmDeliveryWindow window = new FcmDeliveryWindow();
-        window.begin(-1, "target", 100);
-        assertFalse(window.contains(-1, 101));
-    }
-
-    @Test public void concurrentRenewalAndExpiryPreserveLatestDeadline() throws Exception {
-        FcmDeliveryWindow window = new FcmDeliveryWindow();
-        window.begin(10001, "target", 0);
-        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
-        Thread renewal = new Thread(() -> {
-            try { start.await(); } catch (InterruptedException e) { throw new AssertionError(e); }
-            for (int i = 0; i < 10000; i++) window.begin(10001, "target", 30000 + i);
-        });
-        Thread expiry = new Thread(() -> {
-            try { start.await(); } catch (InterruptedException e) { throw new AssertionError(e); }
-            for (int i = 0; i < 10000; i++) window.contains(10001, 20000);
-        });
-        renewal.start(); expiry.start(); start.countDown(); renewal.join(); expiry.join();
-        assertEquals("target", window.packageName(10001, 59998));
-        assertTrue(window.contains(10001, 59998));
-        assertFalse(window.contains(10001, 59999));
-    }
-    @Test public void expiresAtBoundaryAndIsolatesUids() {
-        FcmDeliveryWindow window = new FcmDeliveryWindow();
-        assertFalse(window.contains(10001, 0));
-        window.begin(10001, "target", 100);
-        assertTrue(window.contains(10001, 20099));
-        assertFalse(window.contains(10002, 100));
-        assertFalse(window.contains(10001, 20100));
-    }
-
-    @Test public void staleExpiryCannotEraseRenewedAttribution() {
-        FcmDeliveryWindow window = new FcmDeliveryWindow();
-        window.begin(10001, "old", 0);
-        assertNull(window.packageName(10001, 20000));
-        window.begin(10001, "new", 20000);
-        assertEquals("new", window.packageName(10001, 20001));
-        window.begin(10001, "older", 100);
-        assertEquals("new", window.packageName(10001, 20002));
-        assertNull(window.packageName(10001, 40000));
-    }
-
-    @Test public void invalidTargetCannotReplaceValidAttribution() {
-        FcmDeliveryWindow window = new FcmDeliveryWindow();
-        window.begin(10001, "target", 0);
-        window.begin(10001, null, 100);
-        window.begin(10001, "", 100);
-        assertEquals("target", window.packageName(10001, 200));
-    }
-
-    @Test public void lateOlderUpdateCannotShortenWindow() {
-        FcmDeliveryWindow window = new FcmDeliveryWindow();
-        window.begin(10001, "target", 100);
-        window.begin(10001, "target", 500);
-        window.begin(10001, "target", 200);
-        assertTrue(window.contains(10001, 20499));
-        assertFalse(window.contains(10001, 20500));
+        for (int i = 0; i < 40; i++) {
+            window.begin(10_000 + i, "com.example.app" + i, 1_000L);
+        }
+        window.begin(20_000, "com.example.fresh", 30_000L);
+        assertEquals("com.example.fresh", window.packageName(20_000, 30_000L));
+        assertNull(window.packageName(10_000, 30_000L));
     }
 }

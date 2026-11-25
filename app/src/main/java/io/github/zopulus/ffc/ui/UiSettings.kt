@@ -45,18 +45,10 @@ internal enum class SettingConfirmation(
     val message: Int,
     val action: Int
 ) {
-    ROOT(R.string.settings_root_confirm, R.string.settings_root_confirm_hint, R.string.action_enable),
     HIDE_ICON(R.string.settings_hide_confirm, R.string.settings_hide_confirm_hint, R.string.action_hide);
 
-    fun confirm(
-        config: FcmfixConfig,
-        onConfigChange: (FcmfixConfig) -> Unit,
-        onLauncherIconHiddenChange: (Boolean) -> Unit
-    ) {
+    fun confirm(onLauncherIconHiddenChange: (Boolean) -> Unit) {
         when (this) {
-            ROOT -> if (config.deepSleepGoogleWhitelist) {
-                onConfigChange(config.copy(rootDeepSleepNetworkWhitelist = true))
-            }
             HIDE_ICON -> onLauncherIconHiddenChange(true)
         }
     }
@@ -69,33 +61,6 @@ internal fun settingsGroups(
     onLauncherIconHiddenChange: (Boolean) -> Unit,
     onConfirm: (SettingConfirmation) -> Unit
 ): List<SettingGroup> = listOf(
-    SettingGroup(R.string.settings_network, listOf(
-        SettingEntry(
-            R.drawable.ic_bedtime, R.string.settings_sleep, R.string.settings_sleep_hint,
-            checked = config.deepSleepGoogleWhitelist,
-            onCheckedChange = { enabled ->
-                onConfigChange(config.copy(
-                    deepSleepGoogleWhitelist = enabled,
-                    rootDeepSleepNetworkWhitelist = enabled && config.rootDeepSleepNetworkWhitelist
-                ))
-            }
-        ),
-        SettingEntry(
-            R.drawable.ic_terminal, R.string.settings_root,
-            if (config.deepSleepGoogleWhitelist) R.string.settings_root_hint else R.string.settings_root_disabled,
-            checked = config.deepSleepGoogleWhitelist && config.rootDeepSleepNetworkWhitelist,
-            enabled = config.deepSleepGoogleWhitelist,
-            onCheckedChange = { enabled ->
-                if (enabled) onConfirm(SettingConfirmation.ROOT)
-                else onConfigChange(config.copy(rootDeepSleepNetworkWhitelist = false))
-            }
-        ),
-        SettingEntry(
-            R.drawable.ic_hourglass, R.string.settings_doze, R.string.settings_doze_hint,
-            checked = config.dozeGoogleWhitelist,
-            onCheckedChange = { onConfigChange(config.copy(dozeGoogleWhitelist = it)) }
-        )
-    )),
     SettingGroup(R.string.settings_notifications, listOf(
         SettingEntry(
             R.drawable.ic_shield, R.string.settings_new_apps, R.string.settings_new_apps_hint,
@@ -112,6 +77,11 @@ internal fun settingsGroups(
             R.drawable.ic_ac_unit, R.string.settings_frozen, R.string.settings_frozen_hint,
             checked = config.includeIceBoxDisabledApps,
             onCheckedChange = { onConfigChange(config.copy(includeIceBoxDisabledApps = it)) }
+        ),
+        SettingEntry(
+            R.drawable.ic_wifi_heartbeat, R.string.settings_wifi_heartbeat, R.string.settings_wifi_heartbeat_hint,
+            checked = config.adaptiveWifiHeartbeat,
+            onCheckedChange = { onConfigChange(config.copy(adaptiveWifiHeartbeat = it)) }
         )
     )),
     SettingGroup(

@@ -4,13 +4,11 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class FcmTrustTest {
-    @Test public void entryRequiresAllConditions() {
-        assertTrue(FcmTrust.allowsEntry(FcmTrust.RECEIVE, "target", true, true));
-        assertFalse(FcmTrust.allowsEntry(FcmTrust.RECEIVE, "target", true, false));
-        assertFalse(FcmTrust.allowsEntry(FcmTrust.RECEIVE, "target", false, true));
-        assertFalse(FcmTrust.allowsEntry(FcmTrust.RECEIVE, null, true, true));
-        assertFalse(FcmTrust.allowsEntry(FcmTrust.RECEIVE, "", true, true));
-        assertFalse(FcmTrust.allowsEntry("evil.android.c2dm.intent.RECEIVE", "target", true, true));
+    @Test public void onlyReceiveBroadcastsNeedSenderLookup() {
+        assertTrue(FcmTrust.isDeliveryBroadcast(FcmTrust.RECEIVE));
+        assertFalse(FcmTrust.isDeliveryBroadcast(null));
+        assertFalse(FcmTrust.isDeliveryBroadcast("com.google.firebase.MESSAGING_EVENT"));
+        assertFalse(FcmTrust.isDeliveryBroadcast("evil.android.c2dm.intent.RECEIVE"));
     }
     @Test public void jobRequiresCurrentPermissionAndMatchingPackages() {
         assertTrue(FcmTrust.allowsJob("target", "target", "target", true, true));
@@ -53,17 +51,26 @@ public class FcmTrustTest {
     }
 
     @Test public void nestedUntrustedEntryMasksAndRestoresOuterTrust() {
+        assertFalse(FcmTrust.hasActiveScope());
+        Runnable noopMask = FcmTrust.enter(null, -1);
+        assertFalse(FcmTrust.hasActiveScope());
+        noopMask.run();
+        assertFalse(FcmTrust.hasActiveScope());
         Runnable outer = FcmTrust.enter("target", 10123);
         try {
+            assertTrue(FcmTrust.hasActiveScope());
             assertTrue(FcmTrust.matches(FcmTrust.RECEIVE, "target"));
             Runnable inner = FcmTrust.enter(null, -1);
             try {
+                assertFalse(FcmTrust.hasActiveScope());
                 assertFalse(FcmTrust.matches(FcmTrust.RECEIVE, "target"));
             } finally { inner.run(); }
+            assertTrue(FcmTrust.hasActiveScope());
             assertTrue(FcmTrust.matches(FcmTrust.RECEIVE, "target"));
             assertFalse(FcmTrust.matches(FcmTrust.RECEIVE, "other"));
             assertFalse(FcmTrust.matches("com.google.firebase.MESSAGING_EVENT", "target"));
         } finally { outer.run(); }
+        assertFalse(FcmTrust.hasActiveScope());
         assertFalse(FcmTrust.matches(FcmTrust.RECEIVE, "target"));
     }
 

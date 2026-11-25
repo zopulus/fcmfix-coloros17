@@ -2,7 +2,6 @@ package io.github.zopulus.ffc.xposed;
 
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
-import android.content.pm.PackageManager;
 import android.os.SystemClock;
 import android.os.WorkSource;
 import android.util.Pair;
@@ -114,14 +113,16 @@ public class OplusProxyFix extends XposedModule {
             XposedBridge.hookMethod(method, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
+                    if (!isConfigurationReady()) return;
                     int uid = (Integer) param.args[0];
                     String target = getFcmDeliveryPackage(uid);
+                    if (target == null) return;
                     String requested = (String) param.args[1];
                     android.app.job.JobInfo job = (android.app.job.JobInfo) param.args[2];
                     String jobPackage = job == null || job.getService() == null ? null
                             : job.getService().getPackageName();
-                    if (isConfigurationReady() && FcmTrust.allowsJob(target, requested, jobPackage,
-                            targetIsAllow(target), isInFcmDeliveryWindow(uid, target))
+                    if (FcmTrust.allowsJob(target, requested, jobPackage,
+                            isDeliveryTargetAllowed(target), true)
                             && getTargetUidFromPackageName(target) == uid) {
                         unfreeze(target, uid);
                         printLog("Oplus FCM job-restriction bypass: pkg=" + target + ", uid=" + uid, true);
@@ -164,12 +165,22 @@ public class OplusProxyFix extends XposedModule {
                 case "shouldPreventBroadcastByMaliciousCheck" -> 2;
                 default -> 0;
             };
+            final java.lang.reflect.Field recordIntentField =
+                    XposedHelpers.findFieldIfExists(method.getParameterTypes()[recordIndex], "intent");
             XposedBridge.hookMethod(method, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
                     Object record = param.args[recordIndex];
                     if (record == null) return;
-                    Intent intent = (Intent) XposedHelpers.getObjectField(record, "intent");
+                    Intent intent;
+                    try {
+                        Object raw = recordIntentField != null
+                                ? recordIntentField.get(record)
+                                : XposedHelpers.getObjectField(record, "intent");
+                        intent = raw instanceof Intent ? (Intent) raw : null;
+                    } catch (Throwable e) {
+                        return;
+                    }
                     if (intent == null || !FcmTrust.RECEIVE.equals(intent.getAction())) return;
                     String target;
                     try {
@@ -360,10 +371,12 @@ public class OplusProxyFix extends XposedModule {
                 }
 
                 final Object finalNoProxyResult = noProxyResult;
+                final IntentExtractor intentExtractor = resolveIntentExtractor(method);
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        Intent intent = findIntentArgument(param.args);
+                        if (!isBootComplete) return;
+                        Intent intent = intentExtractor.extract(param.args);
                         if (intent == null || !isFCMAction(intent.getAction())) {
                             return;
                         }
@@ -400,10 +413,12 @@ public class OplusProxyFix extends XposedModule {
                     || !isBooleanType(method.getReturnType())) {
                 continue;
             }
+            final IntentExtractor intentExtractor = resolveIntentExtractor(method);
             XposedBridge.hookMethod(method, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
-                    Intent intent = findIntentArgument(param.args);
+                    if (!isBootComplete) return;
+                    Intent intent = intentExtractor.extract(param.args);
                     if (intent == null || !isFCMAction(intent.getAction())) return;
                     String target = explicitTarget(intent);
                     if (trustedDelivery(intent, target, param)) {
@@ -479,17 +494,6 @@ public class OplusProxyFix extends XposedModule {
         return best;
     }
 
-    private static int getTargetUidFromPackageName(String packageName) {
-        if (packageName != null && context != null) {
-            try {
-                return context.getPackageManager().getPackageUid(packageName, 0);
-            } catch (PackageManager.NameNotFoundException e) {
-                printLog("error: Package not found: " + packageName);
-            }
-        }
-        return -1;
-    }
-
     public static void unfreeze(String target) {
         if (sUnfreezeMethod == null) return;
         unfreeze(target, getTargetUidFromPackageName(target));
@@ -535,6 +539,10 @@ public class OplusProxyFix extends XposedModule {
         printLog("Oplus FCM delivery window: pkg=" + target + ", uid=" + uid
                 + ", duration=" + FCM_DELIVERY_WINDOW_MS + "ms", true);
         return uid;
+    }
+
+    static boolean hasActiveFcmDeliveryWindow() {
+        return sFcmDeliveryWindows.hasActiveWindow(SystemClock.elapsedRealtime());
     }
 
     static boolean isInFcmDeliveryWindow(int uid) {
@@ -611,7 +619,7 @@ public class OplusProxyFix extends XposedModule {
             XposedBridge.hookMethod(method, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
-                    if (param.args.length == 0 || param.args[0] == null) return;
+                    if (!hasActiveFcmDeliveryWindow() || param.args.length == 0 || param.args[0] == null) return;
                     int uid = getHansPackageUid(param.args[0]);
                     if (uid >= 0 && isInFcmDeliveryWindow(uid)) {
                         printLog("Oplus FCM Hans-freeze bypass: pkg="
@@ -645,7 +653,7 @@ public class OplusProxyFix extends XposedModule {
                 XposedBridge.hookMethod(method, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        if (param.args.length == 0 || param.args[0] == null) return;
+                        if (!hasActiveFcmDeliveryWindow() || param.args.length == 0 || param.args[0] == null) return;
                         int uid = getHansPackageUid(param.args[0]);
                         if (uid >= 0 && isInFcmDeliveryWindow(uid)) {
                             printLog("Oplus FCM cgroup-freeze bypass: pkg="
@@ -682,9 +690,17 @@ public class OplusProxyFix extends XposedModule {
                 method.getName(), method.getReturnType().getName(), types);
     }
 
+    private static final Object[] EMPTY_ARGS = new Object[0];
+    private volatile Method sHansGetUidMethod;
+
     private int getHansPackageUid(Object hansPackage) {
         try {
-            Object uid = XposedHelpers.callMethod(hansPackage, "getUid");
+            Method method = sHansGetUidMethod;
+            if (method == null || !method.getDeclaringClass().isInstance(hansPackage)) {
+                method = XposedHelpers.findMethodExact(hansPackage.getClass(), "getUid");
+                sHansGetUidMethod = method;
+            }
+            Object uid = method.invoke(hansPackage, EMPTY_ARGS);
             return uid instanceof Integer ? (Integer) uid : -1;
         } catch (Throwable ignored) {
             return -1;
@@ -748,10 +764,12 @@ public class OplusProxyFix extends XposedModule {
                 logOnce("Unsupported Oplus delivery signature: " + describeMethod(method));
                 continue;
             }
+            final IntentExtractor intentExtractor = resolveIntentExtractor(method);
             XposedBridge.hookMethod(method, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
-                    Intent intent = findIntentArgument(param.args);
+                    if (!isBootComplete) return;
+                    Intent intent = intentExtractor.extract(param.args);
                     if (intent == null || !isFCMIntent(intent)) return;
 
                     String target = explicitTarget(intent);
@@ -786,14 +804,16 @@ public class OplusProxyFix extends XposedModule {
                 logOnce("Unsupported Oplus delivery signature: " + describeMethod(method));
                 continue;
             }
+            final IntentExtractor intentExtractor = resolveIntentExtractor(method);
             XposedBridge.hookMethod(method, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
+                    if (!isBootComplete) return;
                     if (!hasStringArgument(param.args, TYPE_BIND_SERVICE_FROM_GCM)
                             && !hasStringArgument(param.args, START_PROCESS_FROM_GCM_BIND_SERVICE)) {
                         return;
                     }
-                    Intent intent = findIntentArgument(param.args);
+                    Intent intent = intentExtractor.extract(param.args);
                     String target = explicitTarget(intent);
                     if (trustedDelivery(intent, target, param)) {
                         printLog("Oplus GCM bind-service bypass: pkg=" + target, true);
@@ -822,10 +842,12 @@ public class OplusProxyFix extends XposedModule {
                 logOnce("Unsupported Oplus delivery signature: " + describeMethod(method));
                 continue;
             }
+            final IntentExtractor intentExtractor = resolveIntentExtractor(method);
             XposedBridge.hookMethod(method, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
-                    Intent intent = findIntentArgument(param.args);
+                    if (!isBootComplete) return;
+                    Intent intent = intentExtractor.extract(param.args);
                     if (intent == null || !isFCMIntent(intent)) return;
 
                     String target = explicitTarget(intent);
@@ -907,10 +929,6 @@ public class OplusProxyFix extends XposedModule {
         return false;
     }
 
-    private boolean isBooleanType(Class<?> type) {
-        return type == boolean.class || type == Boolean.class;
-    }
-
     private boolean isGoogleCorePackage(String packageName) {
         return "com.google.android.gms".equals(packageName)
                 || "com.google.android.gsf".equals(packageName)
@@ -927,16 +945,51 @@ public class OplusProxyFix extends XposedModule {
         return null;
     }
 
-    private Intent findIntentArgument(Object[] args) {
+    private interface IntentExtractor {
+        Intent extract(Object[] args);
+    }
+
+    private static IntentExtractor resolveIntentExtractor(Method method) {
+        Class<?>[] types = method.getParameterTypes();
+        for (int i = 0; i < types.length; i++) {
+            if (Intent.class.isAssignableFrom(types[i])) {
+                final int index = i;
+                return args -> args[index] instanceof Intent ? (Intent) args[index] : null;
+            }
+        }
+        for (int i = 0; i < types.length; i++) {
+            if (types[i].isPrimitive() || types[i] == String.class) continue;
+            java.lang.reflect.Field field = XposedHelpers.findFieldIfExists(types[i], "intent");
+            if (field != null && Intent.class.isAssignableFrom(field.getType())) {
+                final int index = i;
+                final java.lang.reflect.Field intentField = field;
+                return args -> {
+                    Object holder = args[index];
+                    if (holder == null) return null;
+                    try {
+                        Object nested = intentField.get(holder);
+                        return nested instanceof Intent ? (Intent) nested : null;
+                    } catch (Throwable ignored) {
+                        return null;
+                    }
+                };
+            }
+        }
+        return OplusProxyFix::findIntentArgumentFallback;
+    }
+
+    private static Intent findIntentArgumentFallback(Object[] args) {
         for (Object arg : args) {
             if (arg instanceof Intent) {
                 return (Intent) arg;
             }
         }
         for (Object arg : args) {
-            if (arg == null) continue;
+            if (arg == null || arg instanceof String || arg instanceof Number || arg instanceof Boolean) continue;
+            java.lang.reflect.Field field = XposedHelpers.findFieldIfExists(arg.getClass(), "intent");
+            if (field == null) continue;
             try {
-                Object nestedIntent = XposedHelpers.getObjectField(arg, "intent");
+                Object nestedIntent = field.get(arg);
                 if (nestedIntent instanceof Intent) {
                     return (Intent) nestedIntent;
                 }
@@ -967,15 +1020,4 @@ public class OplusProxyFix extends XposedModule {
     }
 
     private enum UnsupportedResult { VALUE }
-
-    private static String describeMethod(Method method) {
-        StringBuilder result = new StringBuilder(method.getDeclaringClass().getName())
-                .append('#').append(method.getName()).append('(');
-        Class<?>[] types = method.getParameterTypes();
-        for (int i = 0; i < types.length; i++) {
-            if (i > 0) result.append(',');
-            result.append(types[i].getSimpleName());
-        }
-        return result.append("): ").append(method.getReturnType().getSimpleName()).toString();
-    }
 }

@@ -23,12 +23,14 @@ public final class ConfigSnapshot {
         for (String key : ConfigSchema.OPTIONS) {
             Object value = values.get(key);
             if (value != null && !(value instanceof Boolean)) throw new IllegalArgumentException("Invalid " + key);
-            boolean defaultValue = ConfigSchema.defaultValue(key);
-            if ("dozeGoogleWhitelist".equals(key)) defaultValue = flags.get("deepSleepGoogleWhitelist");
-            flags.put(key, value == null ? defaultValue : Boolean.TRUE.equals(value));
+            flags.put(key, value == null ? ConfigSchema.defaultValue(key) : Boolean.TRUE.equals(value));
         }
-        if (!flags.get("deepSleepGoogleWhitelist")) flags.put("rootDeepSleepNetworkWhitelist", false);
         options = Collections.unmodifiableMap(flags);
+    }
+
+    public boolean permitsIceBox(String target, long minimumRevision) {
+        return revision >= minimumRevision && allowList.contains(target)
+                && Boolean.TRUE.equals(options.get(ConfigSchema.KEY_INCLUDE_ICEBOX_DISABLED_APP));
     }
 
     /** A no-op write must also preserve initialization and finish schema migration. */

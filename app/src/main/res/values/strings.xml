@@ -1,4 +1,0 @@
-<resources>
-    <string name="app_name">Fcmfix for ColorOS17</string>
-    <string name="module_description">优化fcm在ColorOS的使用体验，仅适配ColorOS17</string>
-</resources>

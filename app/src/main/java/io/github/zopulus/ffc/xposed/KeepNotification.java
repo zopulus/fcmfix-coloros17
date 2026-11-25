@@ -11,11 +11,7 @@ public class KeepNotification extends XposedModule{
 
     public KeepNotification(ClassLoader classLoader) {
         super(classLoader);
-        try {
-            this.startHook();
-        } catch (Throwable e) {
-            printLog("No Such Method com.android.server.notification.NotificationManagerService.cancelAllNotificationsInt");
-        }
+        HookInstaller.install("NotificationManagerService.cancelAllNotificationsInt", this::startHook);
     }
     
     protected void startHook() throws NoSuchMethodError, XposedHelpers.ClassNotFoundError {
@@ -36,18 +32,18 @@ public class KeepNotification extends XposedModule{
             XposedBridge.hookMethod(targetMethod,new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
-                    if(!isBootComplete){
+                    if (!isBootComplete) return;
+                    Object rawReason = param.args[finalReason_args_index];
+                    Object rawPkg = param.args[finalPkg_args_index];
+                    if (!(rawReason instanceof Integer) || !(rawPkg instanceof String)) return;
+                    int reason = (Integer) rawReason;
+                    if (reason != NotificationListenerService.REASON_PACKAGE_CHANGED
+                            && reason != 10020 && reason != 10021) {
                         return;
                     }
-                    if (param.args[finalPkg_args_index] == null) return;
-                    if(getBooleanConfig("disableAutoCleanNotification",false) && targetIsAllow((String) param.args[finalPkg_args_index])){
-                        int reason = (int)param.args[finalReason_args_index];
-                        if(reason == NotificationListenerService.REASON_PACKAGE_CHANGED){
-                            param.setResult(null);
-                        }
-                        if(reason == 10020 || reason == 10021){ // cos15/oos15
-                            param.setResult(null);
-                        }
+                    if (getBooleanConfig("disableAutoCleanNotification", false)
+                            && targetIsAllow((String) rawPkg)) {
+                        param.setResult(null);
                     }
                 }
             });

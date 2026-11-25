@@ -7,6 +7,7 @@ import android.content.IntentFilter;
 import android.net.Uri;
 import android.os.Bundle;
 import io.github.zopulus.ffc.util.ConfigSnapshot;
+import io.github.zopulus.ffc.util.PendingInstallReports;
 import io.github.zopulus.ffc.util.NewAppAutoAllow;
 import io.github.zopulus.ffc.util.RetryingTask;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -21,7 +22,9 @@ public final class NewAppInstallReceiver extends XposedModule {
         thread.setDaemon(true);
         return thread;
     });
+    private static final PendingInstallReports reports = new PendingInstallReports(NewAppInstallReceiver::schedule);
     static {
+        EVENTS.setRemoveOnCancelPolicy(true);
         EVENTS.setKeepAliveTime(30, TimeUnit.SECONDS);
         EVENTS.allowCoreThreadTimeOut(true);
     }
@@ -42,28 +45,41 @@ public final class NewAppInstallReceiver extends XposedModule {
         onCanReadConfig();
     }
 
+    @Override protected void onServiceConnected() {
+        EVENTS.execute(reports::recovered);
+    }
+
     private synchronized boolean registerListener() {
         if (registered) return true;
         if (context == null) return false;
         IntentFilter filter = new IntentFilter(Intent.ACTION_PACKAGE_ADDED);
+        filter.addAction(Intent.ACTION_PACKAGE_REMOVED);
         filter.addDataScheme("package");
         BroadcastReceiver receiver = new BroadcastReceiver() {
             @Override public void onReceive(Context receiverContext, Intent intent) {
-                if (intent == null || !NewAppAutoAllow.isNewInstall(intent.getAction(),
-                        intent.getBooleanExtra(Intent.EXTRA_REPLACING, false)) || intent.getData() == null) return;
+                if (intent == null || intent.getData() == null) return;
+                boolean replacing = intent.getBooleanExtra(Intent.EXTRA_REPLACING, false);
                 String target = intent.getData().getSchemeSpecificPart();
                 if (target == null || SELF_PACKAGE_NAME.equals(target)) return;
+                ColorOs17Compat.onPackageChanged(target);
+                if (Intent.ACTION_PACKAGE_REMOVED.equals(intent.getAction())) {
+                    if (!replacing) EVENTS.execute(() -> reports.removed(target));
+                    return;
+                }
+                if (!NewAppAutoAllow.isNewInstall(intent.getAction(), replacing)) return;
+                int uid = intent.getIntExtra(Intent.EXTRA_UID, -1);
+                if (uid < 0) return;
                 Bundle extras = new Bundle();
                 extras.putString("eventId", java.util.UUID.randomUUID().toString());
                 extras.putBoolean("replacing", false);
-                extras.putInt("uid", intent.getIntExtra(Intent.EXTRA_UID, -1));
-                new RetryingTask(NewAppInstallReceiver::schedule,
-                        () -> reportInstallation(receiverContext, target, extras), 200, 600, 1500).request();
+                extras.putInt("uid", uid);
+                EVENTS.execute(() -> reports.installed(target, () -> reportInstallation(receiverContext, target, extras)));
             }
         };
         try {
             context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
             registered = true;
+            ColorOs17Compat.invalidateUidCache();
             return true;
         } catch (RuntimeException unavailable) {
             printLog("Installation listener registration failed: " + unavailable);
@@ -78,8 +94,11 @@ public final class NewAppInstallReceiver extends XposedModule {
 
     private static boolean reportInstallation(Context context, String target, Bundle extras) {
         try {
+            // The manager may have been started solely by this call, before its service binds.
+            Bundle report = new Bundle(extras);
+            RemoteConfigReport.attach(report);
             Bundle reply = context.getContentResolver().call(Uri.parse("content://" + SELF_PACKAGE_NAME + ".provider"),
-                    "newAppInstalled", target, extras);
+                    "newAppInstalled", target, report);
             return reply != null && reply.getBoolean("acknowledged", false);
         } catch (SecurityException rejected) {
             printLog("Installation reporter rejected");

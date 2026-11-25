@@ -16,21 +16,9 @@ import io.github.zopulus.ffc.util.FcmTrust;
 public class BroadcastFix extends XposedModule {
     public BroadcastFix(ClassLoader classLoader) {
         super(classLoader);
-        try{
-            this.startHookBroadcastEntryPoints();
-        }catch (Throwable e) {
-            printLog("hook error broadcast entry point:" + e.getMessage());
-        }
-        try{
-            this.startHookBroadcastIntentLocked();
-        }catch (Throwable e) {
-            printLog("hook error broadcastIntentLocked:" + e.getMessage());
-        }
-        try{
-            this.deoptimizeBroadcastCallers();
-        }catch (Throwable e) {
-            printLog("hook error broadcast deoptimize:" + e.getMessage());
-        }
+        HookInstaller.install("broadcast entry point", this::startHookBroadcastEntryPoints);
+        HookInstaller.install("broadcastIntentLocked", this::startHookBroadcastIntentLocked);
+        HookInstaller.install("broadcast deoptimize", this::deoptimizeBroadcastCallers);
     }
 
     /**
@@ -149,57 +137,54 @@ public class BroadcastFix extends XposedModule {
         return -1;
     }
 
-    private String describeMethod(Method method) {
-        StringBuilder result = new StringBuilder(method.getDeclaringClass().getName())
-                .append('#').append(method.getName()).append('(');
-        Class<?>[] types = method.getParameterTypes();
-        for (int i = 0; i < types.length; i++) {
-            if (i > 0) result.append(',');
-            result.append(types[i].getSimpleName());
-        }
-        return result.append(')').toString();
-    }
-
     protected void createBroadcastIntentHooker(int intentIndex, Method method, String stage) {
         printLog("hook target [" + stage + "]: " + describeMethod(method));
         final boolean entry = "entry".equals(stage);
         XposedBridge.hookMethod(method, new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) {
-                // Mask before even resolving config/UID: a failing nested validation must
-                // not expose the outer trusted scope while the original call continues.
-                if (entry) param.addFinallyAction(FcmTrust.enter(null, -1));
+                // Mask nested calls if an outer FcmTrust scope is active on this thread.
+                if (entry) {
+                    if (FcmTrust.hasActiveScope()) {
+                        param.addFinallyAction(FcmTrust.enter(null, -1));
+                    }
+                } else if (!FcmTrust.hasActiveScope() || !isBootComplete) {
+                    return;
+                }
                 try {
                     Intent intent = param.args[intentIndex] instanceof Intent ? (Intent) param.args[intentIndex] : null;
-                    String target = explicitTarget(intent);
-                    boolean allowed = isBootComplete && targetIsAllow(target);
-                    int callerUid = android.os.Binder.getCallingUid();
-                    boolean trusted = entry && intent != null && allowed
-                            && FcmTrust.allowsEntry(intent.getAction(), target, true, isGmsUid(callerUid));
-                    if (entry) {
-                        // Mask even null/invalid nested entries; the bridge restores this in finally.
-                        if (trusted) param.addFinallyAction(FcmTrust.enter(target, callerUid));
-                        if (!trusted && allowed && intent != null && FcmTrust.RECEIVE.equals(intent.getAction())) {
-                            logOnce("FCM rejected: untrusted sender uid=" + callerUid + ", target=" + target);
-                        }
+                    if (intent == null) return;
+                    if (entry && OplusGoogleNetworkFix.clearGoogleRestrictBroadcastIfNeeded(intent)) {
+                        return;
                     }
-                    if (!allowed || intent == null || !FcmTrust.matches(intent.getAction(), target)) return;
+                    if (!isBootComplete || !FcmTrust.isDeliveryBroadcast(intent.getAction())) return;
+                    String target = explicitTarget(intent);
+                    if (target == null || !targetIsAllow(target)) return;
                     if (entry) {
+                        int callerUid = android.os.Binder.getCallingUid();
+                        if (!isGmsUid(callerUid)) {
+                            logOnce("FCM rejected: untrusted sender uid=" + callerUid + ", target=" + target);
+                            return;
+                        }
+                        param.addFinallyAction(FcmTrust.enter(target, callerUid));
                         printLog("FCM trusted sender: uid=" + callerUid + ", target=" + target, true);
                         int targetUid = OplusProxyFix.beginFcmDeliveryWindow(target);
                         boolean activationAttempted = false;
-                        if (getBooleanConfig("includeIceBoxDisableApp", false)
-                                && !IceboxUtils.isAppEnabled(context, target)) {
+                        io.github.zopulus.ffc.util.ConfigSnapshot config = currentConfig();
+                        if (config != null && config.permitsIceBox(target, 0)
+                                && IceboxUtils.appState(context, target) != IceboxUtils.AppState.ENABLED) {
                             activationAttempted = true;
                             // Activation uses the module's SDK permission and finishes before dispatch.
                             // Wait is bounded; no original Binder call is retained or replayed.
-                            if (!IceboxUtils.activateBeforeDelivery(context, target)) {
+                            if (!IceboxUtils.activateBeforeDelivery(context, target, config.revision)) {
                                 logOnce("Ice Box activation failed or timed out: " + target);
                             }
                         }
                         // Activation may wait; refresh attribution after that wait.
                         if (activationAttempted) OplusProxyFix.unfreeze(target);
                         else OplusProxyFix.unfreeze(target, targetUid);
+                    } else if (!FcmTrust.matches(intent.getAction(), target)) {
+                        return;
                     }
                     intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
                     // Framework AppOps arguments are deliberately left untouched.

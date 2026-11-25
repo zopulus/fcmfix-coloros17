@@ -1,6 +1,7 @@
 package io.github.zopulus.ffc.libxposed;
 
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /** Shared production/test dispatcher. Hook failures must not replace framework failures. */
 final class HookInvocation {
@@ -8,16 +9,22 @@ final class HookInvocation {
 
     static Object invoke(XC_MethodHook.MethodHookParam param, XC_MethodHook callback,
                          Original original, Consumer<Throwable> log) throws Throwable {
+        Object[] snapshot = param.args.length == 0 ? param.args : param.args.clone();
+        return invoke(param, callback, original, () -> snapshot, log);
+    }
+
+    static Object invoke(XC_MethodHook.MethodHookParam param, XC_MethodHook callback,
+                         Original original, Supplier<Object[]> restoreArgs,
+                         Consumer<Throwable> log) throws Throwable {
         try {
             boolean beforeSucceeded = false;
-            Object[] originalArgs = param.args.clone();
             try {
                 callback.beforeHookedMethod(param);
                 beforeSucceeded = true;
             } catch (Throwable error) {
                 log.accept(error);
                 cleanup(param, log);
-                param.args = originalArgs;
+                param.args = restoreArgs.get();
                 param.setResult(null);
                 param.resetReturnEarly();
             }

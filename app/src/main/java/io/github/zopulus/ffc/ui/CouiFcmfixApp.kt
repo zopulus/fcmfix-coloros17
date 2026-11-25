@@ -11,7 +11,6 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import io.github.suqi8.coui.kmp.basic.*
 import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.Home
@@ -94,7 +93,6 @@ internal fun FcmfixInterface(
 private sealed interface CouiRoute : NavKey {
     @Serializable data object Tabs : CouiRoute
     @Serializable data object Apps : CouiRoute
-    @Serializable data object Settings : CouiRoute
 }
 
 @Composable
@@ -140,7 +138,7 @@ private fun CouiFcmfixApp(
                         CouiPageList(rememberLazyListState(), pagePadding.withBottomBar(padding), behavior) {
                             couiHomeItems(
                                 state, apps, versionName,
-                                { openPage(CouiRoute.Apps) }, { openPage(CouiRoute.Settings) },
+                                { openPage(CouiRoute.Apps) },
                                 onOpenDiagnostics, onOpenProject,
                             )
                         }
@@ -163,12 +161,6 @@ private fun CouiFcmfixApp(
         }
         entry<CouiRoute.Apps> {
             CouiAppsScreen(state, apps, onConfigChange, onReloadApps, onBack = goBack)
-        }
-        entry<CouiRoute.Settings> {
-            CouiSettingsScreen(
-                state.config, launcherIconHidden, style, onStyleChange,
-                onConfigChange, onLauncherIconHiddenChange, onBack = goBack,
-            )
         }
     }
 }
@@ -237,7 +229,6 @@ private fun LazyListScope.couiHomeItems(
     apps: List<InstalledApp>,
     versionName: String,
     openApps: () -> Unit,
-    openSettings: () -> Unit,
     openDiagnostics: () -> Unit,
     openProject: () -> Unit,
 ) {
@@ -291,7 +282,6 @@ private fun LazyListScope.couiHomeItems(
     }
     item(key = "overview") {
         val allowed = apps.count { it.packageName in state.config.allowedPackages }
-        val protectionCount = listOf(state.config.deepSleepGoogleWhitelist, state.config.dozeGoogleWhitelist).count { it }
         Card(Modifier.couiCardSpacing()) {
             CardListGroup {
                 item {
@@ -304,14 +294,6 @@ private fun LazyListScope.couiHomeItems(
                         },
                         startAction = { CouiRowIcon(R.drawable.ic_notifications) },
                         onClick = openApps,
-                    )
-                }
-                item {
-                    ArrowPreference(
-                        title = stringResource(R.string.home_google),
-                        summary = stringResource(R.string.home_google_count, protectionCount),
-                        startAction = { CouiRowIcon(R.drawable.ic_shield) },
-                        onClick = openSettings,
                     )
                 }
             }

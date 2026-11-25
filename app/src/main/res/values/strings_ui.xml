@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="app_name">Fcmfix for ColorOS17</string>
+    <string name="module_description">Optimize FCM experience on ColorOS (ColorOS17 only)</string>
     <string name="nav_home">Home</string>
     <string name="nav_apps">Apps</string>
     <string name="nav_settings">Settings</string>
@@ -15,8 +17,6 @@
     <string name="home_android_version">%1$s (API %2$d)</string>
     <string name="home_abi_page_size">%1$s (%2$dK)</string>
     <string name="home_fcm">FCM app wake-up</string>
-    <string name="home_google">Google network protection</string>
-    <string name="home_google_count">%1$d of 2 enabled</string>
     <string name="home_diagnostics">Google Play services diagnostics</string>
     <string name="home_project">About Fcmfix</string>
     <string name="apps_count">Enabled apps: %1$d / %2$d</string>
@@ -46,14 +46,8 @@
     <string name="settings_style_hint">Choose the look of Fcmfix</string>
     <string name="settings_style_md3">MD3</string>
     <string name="settings_style_coui">COUI</string>
-    <string name="settings_network">ColorOS network protection</string>
-    <string name="settings_sleep">Sleep standby allowlist</string>
-    <string name="settings_sleep_hint">Allow GMS and GSF to access the network</string>
-    <string name="settings_root">Standby allowlist for UID 0</string>
-    <string name="settings_root_hint">Allow all root processes to access the network</string>
-    <string name="settings_root_disabled">Enable the sleep standby allowlist first</string>
-    <string name="settings_doze">Doze allowlist</string>
-    <string name="settings_doze_hint">Exclude GMS and GSF from Doze optimization</string>
+    <string name="settings_wifi_heartbeat">Adaptive Wi-Fi heartbeat</string>
+    <string name="settings_wifi_heartbeat_hint">Tighten FCM heartbeat on Wi-Fi networks that drop idle connections</string>
     <string name="settings_notifications">App wake-up and notifications</string>
     <string name="settings_new_apps">Automatically allow new apps</string>
     <string name="settings_new_apps_hint">Enable newly installed FCM apps by default</string>
@@ -64,12 +58,9 @@
     <string name="settings_other">Other settings</string>
     <string name="settings_hide_launcher">Hide launcher icon</string>
     <string name="settings_hide_launcher_hint">Hide the Fcmfix launcher icon while the module keeps running</string>
-    <string name="settings_root_confirm">Enable the root network allowlist?</string>
-    <string name="settings_root_confirm_hint">UID 0 can include all processes running as root. Enabling this adds them to the ColorOS sleep standby allowlist.</string>
     <string name="settings_hide_confirm">Hide the launcher icon?</string>
     <string name="settings_hide_confirm_hint">Open Fcmfix from the LSPosed module page. Turn off this setting to restore the launcher icon.</string>
     <string name="action_cancel">Cancel</string>
     <string name="action_back">Back</string>
-    <string name="action_enable">Enable</string>
     <string name="action_hide">Hide</string>
 </resources>

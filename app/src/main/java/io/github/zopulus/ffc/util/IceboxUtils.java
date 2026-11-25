@@ -15,8 +15,6 @@ import android.util.Log;
 import androidx.annotation.RequiresPermission;
 import androidx.core.content.ContextCompat;
 
-import java.util.Objects;
-
 public class IceboxUtils extends BroadcastReceiver {
     private static final java.util.concurrent.ThreadPoolExecutor ACTIVATOR =
             new java.util.concurrent.ThreadPoolExecutor(2, 2, 30,
@@ -25,12 +23,15 @@ public class IceboxUtils extends BroadcastReceiver {
                     new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
 
     /** System entry waits briefly while the module provider uses its own Ice Box grant. */
-    public static boolean activateBeforeDelivery(Context context, String target) {
+    public static boolean activateBeforeDelivery(Context context, String target, long minimumRevision) {
         long deadline = SystemClock.elapsedRealtime() + 1500;
         return ActivationGate.await(ACTIVATOR, () -> {
             if (SystemClock.elapsedRealtime() >= deadline) return false;
             Bundle request = new Bundle();
             request.putLong("deadline", deadline);
+            request.putLong("minimumRevision", minimumRevision);
+            io.github.zopulus.ffc.xposed.RemoteConfigReport.attach(request);
+            if (SystemClock.elapsedRealtime() >= deadline) return false;
             Bundle result = context.getContentResolver().call(
                     Uri.parse("content://io.github.zopulus.ffc.provider"), "activateFrozenApp", target, request);
             return result != null && result.getBoolean("enabled", false);
@@ -42,7 +43,6 @@ public class IceboxUtils extends BroadcastReceiver {
     private static final Uri PERMISSION_URI = Uri.parse("content://" + PACKAGE_NAME + ".SDK");
     private static final Uri NO_PERMISSION_URI = Uri.parse("content://" + PACKAGE_NAME + ".STATE");
     private static final String TAG = "IceboxUtils";
-    private static boolean isIceBoxWorking = false;
     private static PendingIntent authorizedPendingIntent = null;
 
     public static PendingIntent queryPermission(Context context) {
@@ -57,22 +57,25 @@ public class IceboxUtils extends BroadcastReceiver {
             Bundle extra = new Bundle();
             extra.putParcelable("authorize", queryPermission(context));
             Bundle bundle = context.getContentResolver().call(NO_PERMISSION_URI, "query_mode", null, extra);
-            assert bundle != null;
-            return !Objects.equals(bundle.getString("work_mode", null), "MODE_NOT_AVAILABLE");
+            String mode = bundle == null ? null : bundle.getString("work_mode");
+            return mode != null && !mode.isEmpty() && !"MODE_NOT_AVAILABLE".equals(mode);
         } catch (Throwable e) {
             Log.e(TAG, "[icebox] queryWorkMode: " + e.getMessage());
             return false;
         }
     }
 
-    public static boolean isAppEnabled(Context context, String packageName) {
+    public enum AppState { ENABLED, DISABLED, UNKNOWN }
+
+    public static AppState appState(Context context, String packageName) {
         try {
             ApplicationInfo applicationInfo = context.getPackageManager().getApplicationInfo(packageName, PackageManager.MATCH_UNINSTALLED_PACKAGES | PackageManager.MATCH_DISABLED_COMPONENTS);
-            return applicationInfo.enabled;
+            if ((applicationInfo.flags & ApplicationInfo.FLAG_INSTALLED) == 0) return AppState.UNKNOWN;
+            return applicationInfo.enabled ? AppState.ENABLED : AppState.DISABLED;
         } catch (Throwable e) {
             Log.e(TAG, "[icebox] " + packageName + " " + e.getMessage());
         }
-        return true;
+        return AppState.UNKNOWN;
     }
 
     @RequiresPermission(SDK_PERMISSION)
@@ -86,29 +89,23 @@ public class IceboxUtils extends BroadcastReceiver {
         context.getContentResolver().call(PERMISSION_URI, "set_enable", null, extra);
     }
 
-    public static void activeAppBeforeDeadline(Context context, String pkg, long deadline) {
+    public static boolean activeAppBeforeDeadline(Context context, String pkg, long deadline,
+                                                  java.util.concurrent.Callable<Boolean> permitted) throws Exception {
         try {
-            if (SystemClock.elapsedRealtime() >= deadline) return;
-            if (!isIceBoxWorking) {
-                if (ContextCompat.checkSelfPermission(context, SDK_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
-                    Log.e(TAG, "[icebox] need permission " + pkg);
-                    return;
-                }
-                if (!queryWorkMode(context)) {
-                    Log.e(TAG, "[icebox] is not working...");
-                    return;
-                }
-                isIceBoxWorking = true;
-            }
-            if (!isAppEnabled(context, pkg)) {
-                if (SystemClock.elapsedRealtime() >= deadline) return;
-                enableApp(context, true, pkg);
-                Log.i(TAG, "[icebox] successfully enable " + pkg);
-            } else {
-                Log.e(TAG, "[icebox] has been enabled " + pkg);
-            }
-        } catch (Throwable e) {
-            Log.e(TAG, "[icebox] " + pkg + " " + e.getMessage());
+            if (SystemClock.elapsedRealtime() >= deadline) return false;
+            AppState state = appState(context, pkg);
+            if (state == AppState.UNKNOWN) return false;
+            if (state == AppState.DISABLED &&
+                    (ContextCompat.checkSelfPermission(context, SDK_PERMISSION) != PackageManager.PERMISSION_GRANTED ||
+                            !queryWorkMode(context))) return false;
+            if (SystemClock.elapsedRealtime() >= deadline || !permitted.call()
+                    || SystemClock.elapsedRealtime() >= deadline) return false;
+            if (state == AppState.ENABLED) return true;
+            enableApp(context, true, pkg);
+            return appState(context, pkg) == AppState.ENABLED;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Ice Box activation failed for " + pkg, error);
+            return false;
         }
     }
 

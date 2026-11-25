@@ -120,7 +120,7 @@ private fun CouiSettingsPage(
                 negative = DialogButtonBarAction(stringResource(R.string.action_cancel)) { showConfirmation = false },
                 positive = DialogButtonBarAction(stringResource(request.action)) {
                     showConfirmation = false
-                    request.confirm(config, onConfigChange, onLauncherIconHiddenChange)
+                    request.confirm(onLauncherIconHiddenChange)
                 },
             )
         }

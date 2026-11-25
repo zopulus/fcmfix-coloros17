@@ -10,6 +10,18 @@ import java.util.Set;
 /** Storage adapters always pass through the same validation and migration. */
 public final class ConfigCodec {
     private ConfigCodec() {}
+    public static ConfigSnapshot fromPreferences(Map<String, ?> values) {
+        return values != null && Boolean.TRUE.equals(values.get("init")) ? new ConfigSnapshot(values) : null;
+    }
+
+    public static JSONObject toJson(ConfigSnapshot snapshot) throws Exception {
+        JSONObject json = new JSONObject().put("revision", snapshot.revision)
+                .put("allowList", new JSONArray(snapshot.allowList))
+                .put(ConfigSchema.KEY_INSTALL_EVENTS, new JSONArray(snapshot.installEvents));
+        for (String key : ConfigSchema.OPTIONS) json.put(key, snapshot.options.get(key));
+        return json;
+    }
+
     public static ConfigSnapshot fromJson(JSONObject json) throws Exception {
         Map<String, Object> values = new HashMap<>();
         if (json.has("revision")) {

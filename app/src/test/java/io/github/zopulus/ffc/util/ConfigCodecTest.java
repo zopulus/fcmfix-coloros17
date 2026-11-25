@@ -15,15 +15,14 @@ public class ConfigCodecTest {
     @Test public void parsesApplicationsTimestampAndExplicitOptions() throws Exception {
         ConfigSnapshot snapshot = parse("{\"allowList\":[\"com.example.first\",\"com.example.second\"],"
                 + "\"revision\":1791444000000,\"disableAutoCleanNotification\":true,"
-                + "\"includeIceBoxDisableApp\":true,\"deepSleepGoogleWhitelist\":true,"
-                + "\"dozeGoogleWhitelist\":false,\"rootDeepSleepNetworkWhitelist\":true}");
+                + "\"includeIceBoxDisableApp\":true,\"adaptiveWifiHeartbeat\":false,"
+                + "\"autoAllowNewApps\":false}");
         assertEquals(Set.of("com.example.first", "com.example.second"), snapshot.allowList);
         assertEquals(1791444000000L, snapshot.revision);
         assertTrue(snapshot.options.get("disableAutoCleanNotification"));
         assertTrue(snapshot.options.get("includeIceBoxDisableApp"));
-        assertTrue(snapshot.options.get("deepSleepGoogleWhitelist"));
-        assertFalse(snapshot.options.get("dozeGoogleWhitelist"));
-        assertTrue(snapshot.options.get("rootDeepSleepNetworkWhitelist"));
+        assertFalse(snapshot.options.get("adaptiveWifiHeartbeat"));
+        assertFalse(snapshot.options.get("autoAllowNewApps"));
     }
 
     @Test public void acceptsIntegerAndLongJsonRevisionBoundaries() throws Exception {
@@ -32,23 +31,23 @@ public class ConfigCodecTest {
         }
     }
 
-    @Test public void omittedLegacyKeysReachSnapshotDefaults() throws Exception {
+    @Test public void omittedKeysReachSnapshotDefaults() throws Exception {
         ConfigSnapshot snapshot = parse("{\"allowList\":[]}");
         assertEquals(0, snapshot.revision);
-        assertTrue(snapshot.options.get("deepSleepGoogleWhitelist"));
-        assertTrue(snapshot.options.get("dozeGoogleWhitelist"));
-        assertFalse(snapshot.options.get("rootDeepSleepNetworkWhitelist"));
+        assertTrue(snapshot.options.get("adaptiveWifiHeartbeat"));
+        assertTrue(snapshot.options.get("autoAllowNewApps"));
         assertFalse(snapshot.options.get("disableAutoCleanNotification"));
         assertFalse(snapshot.options.get("includeIceBoxDisableApp"));
     }
 
-    @Test public void missingDozeKeyMigratesLegacySleepOptionWithoutForwardingRemovedOption() throws Exception {
-        for (boolean sleep : new boolean[]{false, true}) {
-            ConfigSnapshot snapshot = parse("{\"allowList\":[],\"deepSleepGoogleWhitelist\":"
-                    + sleep + ",\"disableGoogleNetworkControl\":false}");
-            assertEquals(sleep, snapshot.options.get("dozeGoogleWhitelist"));
-            assertFalse(snapshot.options.containsKey("disableGoogleNetworkControl"));
-        }
+    @Test public void ignoresRetiredStandbyAndNetworkOptions() throws Exception {
+        ConfigSnapshot snapshot = parse("{\"allowList\":[],\"deepSleepGoogleWhitelist\":false,"
+                + "\"dozeGoogleWhitelist\":false,\"rootDeepSleepNetworkWhitelist\":true,"
+                + "\"disableGoogleNetworkControl\":false}");
+        assertFalse(snapshot.options.containsKey("deepSleepGoogleWhitelist"));
+        assertFalse(snapshot.options.containsKey("dozeGoogleWhitelist"));
+        assertFalse(snapshot.options.containsKey("rootDeepSleepNetworkWhitelist"));
+        assertFalse(snapshot.options.containsKey("disableGoogleNetworkControl"));
     }
 
     @Test public void deduplicatesRepeatedApplicationEntries() throws Exception {

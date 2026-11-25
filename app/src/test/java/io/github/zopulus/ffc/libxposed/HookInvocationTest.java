@@ -68,6 +68,32 @@ public class HookInvocationTest {
         assertEquals(1, errors.size());
     }
 
+    @Test public void lazyRestoreSupplierRunsOnlyWhenBeforeFails() throws Throwable {
+        java.util.concurrent.atomic.AtomicInteger restores = new java.util.concurrent.atomic.AtomicInteger();
+        Object ok = HookInvocation.invoke(param(), new XC_MethodHook() {
+            @Override protected void beforeHookedMethod(MethodHookParam p) { p.args[0] = 42; }
+        }, args -> args[0], () -> {
+            restores.incrementAndGet();
+            return new Object[]{7};
+        }, error -> fail(error.toString()));
+        assertEquals(42, ok);
+        assertEquals(0, restores.get());
+
+        List<Throwable> errors = new ArrayList<>();
+        Object recovered = HookInvocation.invoke(param(), new XC_MethodHook() {
+            @Override protected void beforeHookedMethod(MethodHookParam p) {
+                p.args[0] = 99;
+                throw new RuntimeException("boom");
+            }
+        }, args -> args[0], () -> {
+            restores.incrementAndGet();
+            return new Object[]{7};
+        }, errors::add);
+        assertEquals(7, recovered);
+        assertEquals(1, restores.get());
+        assertEquals(1, errors.size());
+    }
+
     @Test public void originalExceptionSurvivesFailedAfterAndCleansTrust() throws Throwable {
         List<Throwable> errors = new ArrayList<>();
         Exception original = new Exception("framework failure");

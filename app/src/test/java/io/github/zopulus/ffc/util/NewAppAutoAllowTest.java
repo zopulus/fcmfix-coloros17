@@ -75,10 +75,15 @@ public class NewAppAutoAllowTest {
         assertEquals(Set.of("manual"), ConfigCodec.fromJson(saved).allowList);
     }
 
-    @Test public void fcmDetectionKeepsOriginalTwoReceiverNames() {
-        assertTrue(FcmApps.isReceiverName("com.google.firebase.iid.FirebaseInstanceIdReceiver"));
-        assertTrue(FcmApps.isReceiverName("com.google.android.gms.measurement.AppMeasurementReceiver"));
-        assertFalse(FcmApps.isReceiverName("com.google.firebase.messaging.FirebaseMessagingService"));
-        assertFalse(FcmApps.isReceiverName(null));
+    @Test public void fcmDetectionUsesC2dmAndMessagingActionsAndFiltersSelfAndSystem() {
+        assertEquals("com.google.android.c2dm.intent.RECEIVE", FcmApps.ACTION_C2DM_RECEIVE);
+        assertEquals("com.google.firebase.MESSAGING_EVENT", FcmApps.ACTION_FIREBASE_MESSAGING);
+        assertTrue(FcmApps.isEligiblePackage("com.example.chat",
+                android.content.pm.ApplicationInfo.FLAG_INSTALLED));
+        assertFalse(FcmApps.isEligiblePackage("android",
+                android.content.pm.ApplicationInfo.FLAG_INSTALLED));
+        assertFalse(FcmApps.isEligiblePackage("io.github.zopulus.ffc",
+                android.content.pm.ApplicationInfo.FLAG_INSTALLED));
+        assertFalse(FcmApps.isEligiblePackage("com.example.uninstalled", 0));
     }
 }

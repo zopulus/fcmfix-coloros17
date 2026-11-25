@@ -21,7 +21,14 @@ public final class ConfigSaveQueue {
     public static void submit(Runnable task) { WRITER.execute(task); }
 
     /** Keep the provider request active until persistence finishes; never acknowledge an enqueue. */
-    public static <T> T call(Callable<T> task) throws Exception {
+    public static void saveAndNotify(Callable<Boolean> save, Runnable notify) throws Exception {
+        call(() -> {
+            if (save.call()) notify.run();
+            return null;
+        });
+    }
+
+    static <T> T call(Callable<T> task) throws Exception {
         if (Thread.currentThread() == writerThread) return task.call();
         Future<T> future = WRITER.submit(task);
         try {

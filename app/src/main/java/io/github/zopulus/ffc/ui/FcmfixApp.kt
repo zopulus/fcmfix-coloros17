@@ -90,7 +90,6 @@ import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.vectorResource
 import io.github.zopulus.ffc.R
@@ -201,7 +200,7 @@ internal fun FcmfixApp(
                             ) {
                                 Text("Fcmfix", modifier = Modifier.alignByBaseline(), style = titleStyle)
                                 Text(
-                                    "for ColorOS17",
+                                    stringResource(R.string.home_subtitle),
                                     modifier = Modifier.alignByBaseline(),
                                     style = MaterialTheme.typography.titleMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -221,7 +220,7 @@ internal fun FcmfixApp(
                         { expanded ->
                             if (!expanded) {
                                 Text(
-                                    "for ColorOS17",
+                                    stringResource(R.string.home_subtitle),
                                     modifier = Modifier.padding(start = 4.dp),
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -255,7 +254,6 @@ internal fun FcmfixApp(
                     apps = apps,
                     versionName = versionName,
                     onOpenApps = { coroutineScope.launch { pagerState.animateScrollToPage(MainTab.APPS.ordinal) } },
-                    onOpenSettings = { coroutineScope.launch { pagerState.animateScrollToPage(MainTab.SETTINGS.ordinal) } },
                     onOpenDiagnostics = onOpenDiagnostics,
                     onOpenProject = onOpenProject
                 )
@@ -290,16 +288,10 @@ private fun HomeScreen(
     apps: List<InstalledApp>,
     versionName: String,
     onOpenApps: () -> Unit,
-    onOpenSettings: () -> Unit,
     onOpenDiagnostics: () -> Unit,
     onOpenProject: () -> Unit
 ) {
-    val config = state.config
-    val allowedFcmCount = apps.count { it.packageName in config.allowedPackages }
-    val enabledGoogleProtections = listOf(
-        config.deepSleepGoogleWhitelist,
-        config.dozeGoogleWhitelist
-    ).count { it }
+    val allowedFcmCount = apps.count { it.packageName in state.config.allowedPackages }
 
     Column(
         modifier = modifier
@@ -313,19 +305,13 @@ private fun HomeScreen(
             items = listOf(
                 HomeInfoItem(
                     icon = ImageVector.vectorResource(R.drawable.ic_notifications),
-                    title = "FCM 应用唤醒",
-                    summary = if (state.appsLoading && apps.isEmpty()) "正在读取应用列表" else if (state.appsLoadFailed && apps.isEmpty()) {
-                        "无法读取应用列表"
-                    } else {
-                        "$allowedFcmCount / ${apps.size} 个应用已允许"
+                    title = stringResource(R.string.home_fcm),
+                    summary = when {
+                        state.appsLoading && apps.isEmpty() -> stringResource(R.string.apps_loading)
+                        state.appsLoadFailed && apps.isEmpty() -> stringResource(R.string.apps_load_failed)
+                        else -> stringResource(R.string.apps_count, allowedFcmCount, apps.size)
                     },
                     onClick = onOpenApps
-                ),
-                HomeInfoItem(
-                    icon = ImageVector.vectorResource(R.drawable.ic_shield),
-                    title = "Google 联网保护",
-                    summary = "$enabledGoogleProtections / 2 项已启用",
-                    onClick = onOpenSettings
                 )
             )
         )
@@ -333,12 +319,12 @@ private fun HomeScreen(
             items = listOf(
                 HomeInfoItem(
                     icon = ImageVector.vectorResource(R.drawable.ic_troubleshoot),
-                    title = "Google Play 服务诊断",
+                    title = stringResource(R.string.home_diagnostics),
                     onClick = onOpenDiagnostics
                 ),
                 HomeInfoItem(
                     icon = Icons.Outlined.Info,
-                    title = "关于 fcmfix",
+                    title = stringResource(R.string.home_project),
                     onClick = onOpenProject
                 )
             )
@@ -381,14 +367,14 @@ private fun HomeStatusCard(connected: Boolean, versionName: String) {
                     contentColor = MaterialTheme.colorScheme.onPrimary
                 ) {
                     Text(
-                        "API 102",
+                        stringResource(R.string.home_module_api),
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                         style = MaterialTheme.typography.labelSmallEmphasized
                     )
                 }
             },
             supportingContent = {
-                Text("版本 $versionName", style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(R.string.home_version, versionName), style = MaterialTheme.typography.bodyMedium)
             },
             verticalAlignment = Alignment.CenterVertically,
             colors = ListItemDefaults.colors(
@@ -401,7 +387,7 @@ private fun HomeStatusCard(connected: Boolean, versionName: String) {
             elevation = ListItemDefaults.elevation(),
             content = {
                 Text(
-                    if (connected) "已激活" else "未激活",
+                    stringResource(if (connected) R.string.home_active else R.string.home_inactive),
                     style = MaterialTheme.typography.titleMediumEmphasized
                 )
             }
@@ -411,22 +397,21 @@ private fun HomeStatusCard(connected: Boolean, versionName: String) {
 
 @Composable
 private fun SystemInfoCard() {
-    val systemInfo = remember {
-        val manufacturer = Build.MANUFACTURER.orEmpty().trim()
-        val model = Build.MODEL.orEmpty().trim()
-        val device = if (model.startsWith(manufacturer, ignoreCase = true)) model
-            else listOf(manufacturer, model).filter(String::isNotBlank).joinToString(" ")
-        val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "未知"
-        val pageSize = runCatching { Os.sysconf(OsConstants._SC_PAGESIZE) }.getOrNull()
-        val architecture = if (pageSize != null && pageSize > 0) {
-            "$abi (${pageSize / 1024}K)"
-        } else abi
-        listOf(
-            "系统版本" to "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
-            "设备" to device.ifBlank { "未知" },
-            "系统架构" to architecture
-        )
-    }
+    val unknown = stringResource(R.string.home_unknown)
+    val manufacturer = Build.MANUFACTURER.orEmpty().trim()
+    val model = Build.MODEL.orEmpty().trim()
+    val device = if (model.startsWith(manufacturer, ignoreCase = true)) model
+        else listOf(manufacturer, model).filter(String::isNotBlank).joinToString(" ")
+    val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: unknown
+    val pageSize = remember { runCatching { Os.sysconf(OsConstants._SC_PAGESIZE) }.getOrNull() }
+    val architecture = if (pageSize != null && pageSize > 0) {
+        stringResource(R.string.home_abi_page_size, abi, pageSize / 1024)
+    } else abi
+    val systemInfo = listOf(
+        stringResource(R.string.home_system) to stringResource(R.string.home_android_version, Build.VERSION.RELEASE, Build.VERSION.SDK_INT),
+        stringResource(R.string.home_device) to device.ifBlank { unknown },
+        stringResource(R.string.home_architecture) to architecture
+    )
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceBright,
@@ -661,7 +646,7 @@ private fun EmptyAppsState(
         Text(title, style = MaterialTheme.typography.titleMedium)
         Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (showButton) {
-            TextButton(onClick = onReload) { Text("刷新列表") }
+            TextButton(onClick = onReload) { Text(stringResource(R.string.apps_reload)) }
         }
     }
 }
@@ -687,8 +672,8 @@ private fun AppRow(
         colors = expressiveSegmentedColors(),
         leadingContent = {
             Image(
-                bitmap = app.icon.asImageBitmap(),
-                contentDescription = "${app.label} 图标",
+                bitmap = app.icon,
+                contentDescription = null,
                 modifier = Modifier.size(46.dp).clip(RoundedCornerShape(14.dp))
             )
         },
@@ -729,15 +714,12 @@ private fun SettingsScreen(
     confirmation?.let { request ->
         AlertDialog(
             onDismissRequest = { confirmation = null },
-            icon = if (request == SettingConfirmation.ROOT) {
-                { Icon(Icons.Outlined.Warning, contentDescription = null) }
-            } else null,
             title = { Text(stringResource(request.title)) },
             text = { Text(stringResource(request.message)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmation = null
-                    request.confirm(state.config, onConfigChange, onLauncherIconHiddenChange)
+                    request.confirm(onLauncherIconHiddenChange)
                 }) { Text(stringResource(request.action)) }
             },
             dismissButton = {

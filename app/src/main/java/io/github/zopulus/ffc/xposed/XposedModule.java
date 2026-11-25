@@ -3,6 +3,9 @@ package io.github.zopulus.ffc.xposed;
 import android.annotation.SuppressLint;
 import java.lang.reflect.Method;
 import io.github.zopulus.ffc.util.ConfigSnapshot;
+import io.github.zopulus.ffc.util.ConfigCodec;
+import io.github.zopulus.ffc.util.HookConfig;
+import org.json.JSONObject;
 import io.github.zopulus.ffc.util.ConfigSchema;
 import io.github.zopulus.ffc.util.DiagnosticLogger;
 import android.os.SystemClock;
@@ -23,8 +26,6 @@ import io.github.zopulus.ffc.libxposed.XC_MethodHook;
 import io.github.zopulus.ffc.libxposed.XposedBridge;
 import io.github.zopulus.ffc.libxposed.XposedHelpers;
 
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Set;
 
 public abstract class XposedModule {
@@ -37,6 +38,7 @@ public abstract class XposedModule {
     protected final ClassLoader classLoader;
     static final String TAG = "FcmFix";
     private static volatile ConfigSnapshot config;
+    private static final HookConfig hookConfig = new HookConfig();
     private static boolean reloadRequested;
 
     @SuppressLint("StaticFieldLeak")
@@ -51,9 +53,7 @@ public abstract class XposedModule {
     protected XposedModule(final ClassLoader classLoader) {
         this.classLoader = classLoader;
         instances.add(this);
-        if (instances.size() == 1) {
-            initContext(classLoader);
-        } else if (context != null) {
+        if (context != null) {
             try {
                 UserManager userManager = context.getSystemService(UserManager.class);
                 if (userManager != null && userManager.isUserUnlocked()) {
@@ -69,14 +69,34 @@ public abstract class XposedModule {
         selfPackageName = packageName;
     }
 
-    private static void initContext(final ClassLoader classLoader) {
+    private static volatile boolean contextHookInstalled = false;
+
+    public static synchronized void ensureContextHook(final ClassLoader classLoader) {
+        if (context != null || contextHookInstalled) {
+            return;
+        }
+        contextHookInstalled = true;
         try {
-            XposedHelpers.findAndHookMethod("android.content.ContextWrapper", classLoader, "attachBaseContext", Context.class, new XC_MethodHook() {
+            java.lang.reflect.Method method = XposedHelpers.findMethodExact(
+                    XposedHelpers.findClass("android.content.ContextWrapper", classLoader),
+                    "attachBaseContext", Context.class);
+            final io.github.libxposed.api.XposedInterface.HookHandle[] handleRef =
+                    new io.github.libxposed.api.XposedInterface.HookHandle[1];
+            handleRef[0] = XposedBridge.hookMethod(method, new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam methodHookParam) {
-                    if (context == null) {
-                        context = (Context) methodHookParam.thisObject;
-                        startBootInitThread();
+                    if (context == null && methodHookParam.thisObject instanceof Context) {
+                        Context candidate = (Context) methodHookParam.thisObject;
+                        Context appContext = candidate.getApplicationContext();
+                        initSystemServerContext(appContext != null ? appContext : candidate);
+                    }
+                    io.github.libxposed.api.XposedInterface.HookHandle handle = handleRef[0];
+                    if (context != null && handle != null) {
+                        handleRef[0] = null;
+                        try {
+                            handle.unhook();
+                        } catch (Throwable ignored) {
+                        }
                     }
                 }
             });
@@ -164,8 +184,11 @@ public abstract class XposedModule {
     protected void onCanReadConfig() throws Throwable {
     }
 
+    protected static ConfigSnapshot currentConfig() { return config; }
+
     protected static boolean isConfigurationReady() { return config != null; }
     protected void onConfigLoaded(ConfigSnapshot previous, ConfigSnapshot current) throws Throwable { }
+    protected void onServiceConnected() { }
     private static void notifyConfigLoaded(ConfigSnapshot previous) {
         for (XposedModule instance : instances) {
             try { instance.onConfigLoaded(previous, config); }
@@ -260,27 +283,21 @@ public abstract class XposedModule {
     }
 
     private static void reloadLatestConfig() throws Throwable {
-        boolean loaded = false;
+        JSONObject remote = null;
+        JSONObject local = null;
         Throwable failure = null;
-        try { loadConfigFromRemotePreferences(); loaded = true; } catch (Throwable error) { failure = error; }
-        try { loadConfigFromContentProvider(); loaded = true; } catch (Throwable error) { failure = error; }
-        if (!loaded && failure != null) throw failure;
+        try {
+            SharedPreferences preferences = XposedBridge.getRemotePreferences("config");
+            ConfigSnapshot snapshot = preferences == null ? null : ConfigCodec.fromPreferences(preferences.getAll());
+            if (snapshot != null) remote = ConfigCodec.toJson(snapshot);
+        } catch (Throwable error) { failure = error; }
+        try { local = loadConfigFromContentProvider(); }
+        catch (Throwable error) { failure = error; }
+        if (local == null && remote == null && failure != null) throw failure;
+        config = hookConfig.resolve(local, remote);
     }
 
-    private static void loadConfigFromRemotePreferences() {
-        SharedPreferences remotePreferences = XposedBridge.getRemotePreferences("config");
-        if (remotePreferences == null) {
-            throw new IllegalStateException("remotePreferences 不可用");
-        }
-        java.util.Map<String, ?> values = remotePreferences.getAll();
-        if (!Boolean.TRUE.equals(values.get("init"))) throw new IllegalStateException("Remote config not initialized");
-        ConfigSnapshot snapshot = new ConfigSnapshot(values);
-        if (config == null || snapshot.revision > config.revision) config = snapshot;
-        printLog("[RemotePreferences] allowList size: " + snapshot.allowList.size());
-    }
-
-    @SuppressLint("Range")
-    private static void loadConfigFromContentProvider() throws Throwable {
+    private static JSONObject loadConfigFromContentProvider() throws Exception {
         if (context == null) {
             throw new IllegalStateException("context 不可用");
         }
@@ -288,32 +305,19 @@ public abstract class XposedModule {
         try {
             cursor = context.getContentResolver().query(
                     Uri.parse("content://" + SELF_PACKAGE_NAME + ".provider/config"),
-                    null, "all", null, null);
+                    null, ConfigSchema.HOOK_SNAPSHOT, null, null);
             if (cursor == null || cursor.getCount() == 0) {
                 throw new IllegalStateException("provider 无数据");
             }
-            Set<String> allowListTmp = new HashSet<>();
-            boolean init = false;
-            long revision = 0;
-            HashMap<String, Object> values = new HashMap<>();
             cursor.moveToFirst();
-            do {
-                String key = cursor.getString(cursor.getColumnIndex("key"));
-                String value = cursor.getString(cursor.getColumnIndex("value"));
-                if ("allowList".equals(key)) allowListTmp.add(value);
-                else if ("revision".equals(key)) revision = Long.parseLong(value);
-                else if ("init".equals(key)) init = "1".equals(value);
-                else if (ConfigSchema.OPTIONS.contains(key))
-                    values.put(key, "1".equals(value));
-            } while (cursor.moveToNext());
-            if (!init) throw new IllegalStateException("provider 未初始化");
-            values.put("allowList", allowListTmp);
-            values.put("revision", revision);
-            ConfigSnapshot snapshot = new ConfigSnapshot(values);
-            if (config == null || snapshot.revision >= config.revision) config = snapshot;
-            if ("android".equals(getSelfPackageName())) {
-                printLog("[ContentProvider]onUpdateConfig allowList size: " + allowListTmp.size());
+            int keyColumn = cursor.getColumnIndexOrThrow("key");
+            int valueColumn = cursor.getColumnIndexOrThrow("value");
+            if (!ConfigSchema.HOOK_SNAPSHOT.equals(cursor.getString(keyColumn))) {
+                throw new IllegalStateException("provider 快照格式无效");
             }
+            JSONObject local = new JSONObject(cursor.getString(valueColumn));
+            ConfigCodec.fromJson(local);
+            return local;
         } finally {
             if (cursor != null) {
                 cursor.close();
@@ -330,6 +334,9 @@ public abstract class XposedModule {
                     public void onReceive(Context receiverContext, Intent intent) {
                         if (intent != null && (SELF_PACKAGE_NAME + ".update.config").equals(intent.getAction())) {
                             onUpdateConfig();
+                            if (intent.getBooleanExtra(ConfigSchema.EXTRA_SERVICE_CONNECTED, false)) {
+                                for (XposedModule instance : instances) instance.onServiceConnected();
+                            }
                         }
                     }
                 };
@@ -352,6 +359,8 @@ public abstract class XposedModule {
 
     protected static boolean isGmsUid(int uid) {
         if (!isCurrentUserAppUid(uid) || context == null) return false;
+        int cachedUid = ColorOs17Compat.gmsUid(context);
+        if (cachedUid >= 10_000) return uid == cachedUid;
         try {
             return isGmsUid(uid, context.getPackageManager().getPackagesForUid(uid));
         } catch (RuntimeException error) {
@@ -388,6 +397,30 @@ public abstract class XposedModule {
         });
     }
 
+    private static volatile java.lang.reflect.Field sBroadcastRecordIntentField;
+    private static volatile java.lang.reflect.Field sBroadcastRecordCallingUidField;
+
+    private static Intent readBroadcastRecordIntent(Object record) throws IllegalAccessException {
+        java.lang.reflect.Field field = sBroadcastRecordIntentField;
+        if (field == null) {
+            field = XposedHelpers.findFieldIfExists(record.getClass(), "intent");
+            if (field == null) throw new NoSuchFieldError("BroadcastRecord#intent");
+            sBroadcastRecordIntentField = field;
+        }
+        Object raw = field.get(record);
+        return raw instanceof Intent ? (Intent) raw : null;
+    }
+
+    private static int readBroadcastRecordCallingUid(Object record) throws IllegalAccessException {
+        java.lang.reflect.Field field = sBroadcastRecordCallingUidField;
+        if (field == null) {
+            field = XposedHelpers.findFieldIfExists(record.getClass(), "callingUid");
+            if (field == null) throw new NoSuchFieldError("BroadcastRecord#callingUid");
+            sBroadcastRecordCallingUidField = field;
+        }
+        return field.getInt(record);
+    }
+
     protected boolean trustedDelivery(Intent intent, String target, XC_MethodHook.MethodHookParam param) {
         // Require a coherent, explicit destination. Do not select an arbitrary allowlisted string argument.
         if (!isBootComplete || intent == null || target == null || !target.equals(explicitTarget(intent))
@@ -396,9 +429,9 @@ public abstract class XposedModule {
             // A queued broadcast is attributed by BroadcastRecord, never by ambient Binder identity.
             for (Object arg : param.args) {
                 if (arg == null || !"com.android.server.am.BroadcastRecord".equals(arg.getClass().getName())) continue;
-                return XposedHelpers.getObjectField(arg, "intent") == intent
+                return readBroadcastRecordIntent(arg) == intent
                         && FcmTrust.RECEIVE.equals(intent.getAction())
-                        && isGmsUid((Integer) XposedHelpers.getObjectField(arg, "callingUid"));
+                        && isGmsUid(readBroadcastRecordCallingUid(arg));
             }
             if (param.method instanceof Method) {
                 Method method = (Method) param.method;
@@ -415,11 +448,13 @@ public abstract class XposedModule {
                         if (!(info instanceof android.content.pm.ApplicationInfo)
                                 || !target.equals(((android.content.pm.ApplicationInfo) info).packageName)) return false;
                     }
-                    // Reuse one fresh package query only within this validation.
-                    String[] packages = context.getPackageManager().getPackagesForUid(callerUid);
-                    boolean gms = isGmsUid(callerUid, packages);
-                    boolean selfInWindow = !gms && packages != null && java.util.Arrays.asList(packages).contains(target)
-                            && OplusProxyFix.isInFcmDeliveryWindow(callerUid, target);
+                    boolean gms = isGmsUid(callerUid);
+                    boolean selfInWindow = false;
+                    if (!gms && isCurrentUserAppUid(callerUid)
+                            && OplusProxyFix.isInFcmDeliveryWindow(callerUid, target)) {
+                        String[] packages = context.getPackageManager().getPackagesForUid(callerUid);
+                        selfInWindow = packages != null && java.util.Arrays.asList(packages).contains(target);
+                    }
                     boolean gcmBind = "isAllowStartFromBindService".equals(methodName)
                             && "bsgcm".equals(param.args[5]);
                     boolean trusted = FcmTrust.allowsService(intent.getAction(), gms, selfInWindow, gcmBind);
@@ -444,5 +479,29 @@ public abstract class XposedModule {
 
     protected static String getSelfPackageName() {
         return selfPackageName;
+    }
+
+    protected static boolean isBooleanType(Class<?> type) {
+        return type == boolean.class || type == Boolean.class;
+    }
+
+    protected static int getTargetUidFromPackageName(String packageName) {
+        if (packageName == null || context == null) return -1;
+        try {
+            return context.getPackageManager().getPackageUid(packageName, 0);
+        } catch (android.content.pm.PackageManager.NameNotFoundException ignored) {
+            return -1;
+        }
+    }
+
+    protected static String describeMethod(Method method) {
+        StringBuilder result = new StringBuilder(method.getDeclaringClass().getName())
+                .append('#').append(method.getName()).append('(');
+        Class<?>[] types = method.getParameterTypes();
+        for (int i = 0; i < types.length; i++) {
+            if (i > 0) result.append(',');
+            result.append(types[i].getSimpleName());
+        }
+        return result.append("): ").append(method.getReturnType().getSimpleName()).toString();
     }
 }

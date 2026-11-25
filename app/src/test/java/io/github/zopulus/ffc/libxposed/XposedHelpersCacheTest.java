@@ -28,6 +28,14 @@ public class XposedHelpersCacheTest {
         assertEquals("child", XposedHelpers.getObjectField(new Child(), "value"));
         assertEquals("parent", XposedHelpers.getObjectField(new Parent(), "value"));
     }
+    @Test public void missingFieldProbeReturnsNullAndKeepsNegativeCacheConsistent() {
+        assertNull(XposedHelpers.findFieldIfExists(null, "value"));
+        assertNull(XposedHelpers.findFieldIfExists(Fixture.class, null));
+        assertNull(XposedHelpers.findFieldIfExists(Child.class, "absent"));
+        assertNull(XposedHelpers.findFieldIfExists(Child.class, "absent"));
+        assertNotNull(XposedHelpers.findFieldIfExists(Child.class, "value"));
+        assertThrows(NoSuchFieldError.class, () -> XposedHelpers.getObjectField(new Child(), "absent"));
+    }
     @Test public void overloadRuntimeTypesAndExactSignaturesDoNotCollide() throws Exception {
         Fixture fixture = new Fixture();
         for (int i = 0; i < 3; i++) {

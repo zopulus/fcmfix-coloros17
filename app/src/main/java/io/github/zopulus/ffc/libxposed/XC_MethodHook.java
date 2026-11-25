@@ -11,9 +11,14 @@ public abstract class XC_MethodHook {
         public Runnable finallyAction;
 
         public void addFinallyAction(Runnable action) {
+            if (action == null) return;
             Runnable previous = finallyAction;
+            if (previous == null) {
+                finallyAction = action;
+                return;
+            }
             finallyAction = () -> {
-                try { action.run(); } finally { if (previous != null) previous.run(); }
+                try { action.run(); } finally { previous.run(); }
             };
         }
 

@@ -11,6 +11,7 @@ import io.github.libxposed.api.XposedInterface;
 
 public final class XposedBridge {
 
+    private static final Object[] EMPTY_ARGS = new Object[0];
     private static XposedInterface xposedInterface;
 
 
@@ -30,22 +31,25 @@ public final class XposedBridge {
         return xposedInterface.getRemotePreferences(group);
     }
 
-    public static void hookMethod(Member member, XC_MethodHook callback) {
+    public static XposedInterface.HookHandle hookMethod(Member member, XC_MethodHook callback) {
         ensureInit();
         if (!(member instanceof Method) && !(member instanceof Constructor<?>)) {
             throw new IllegalArgumentException("Only Method/Constructor can be hooked");
         }
 
-        // One interceptor per registration. Replaying a global callback list here would
-        // run callbacks N times when a method has N registrations.
-        xposedInterface.hook((java.lang.reflect.Executable) member)
+        // Hoist per-registration closure; restore args lazily from Chain only if beforeHookedMethod throws.
+        java.util.function.Consumer<Throwable> errorLogger =
+                error -> log("Hook failed: " + member + ": " + error);
+        return xposedInterface.hook((java.lang.reflect.Executable) member)
                 .intercept(chain -> {
                     XC_MethodHook.MethodHookParam param = new XC_MethodHook.MethodHookParam();
                     param.method = chain.getExecutable();
                     param.thisObject = chain.getThisObject();
-                    param.args = chain.getArgs().toArray(new Object[0]);
+                    java.util.List<Object> chainArgs = chain.getArgs();
+                    param.args = chainArgs.isEmpty() ? EMPTY_ARGS : chainArgs.toArray(EMPTY_ARGS);
                     return HookInvocation.invoke(param, callback, chain::proceed,
-                            error -> log("Hook failed: " + member + ": " + error));
+                            () -> chainArgs.isEmpty() ? EMPTY_ARGS : chainArgs.toArray(EMPTY_ARGS),
+                            errorLogger);
                 });
     }
 
